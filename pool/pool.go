@@ -1,62 +1,63 @@
-package pool
+package main
 
 import (
     "context"
     "fmt"
-    "sync"
     "time"
+    "yourmodule/pool"
 )
 
-type Task struct {
-    ID int
+// EmailTask sends an email
+type EmailTask struct {
+    To      string
+    Subject string
 }
 
-func (t *Task) Process() {
-    fmt.Printf("processing task %d\n", t.ID)
-    time.Sleep(5 * time.Second)
+func (t *EmailTask) Process() error {
+    fmt.Printf("sending email to %s: %s\n", t.To, t.Subject)
+    time.Sleep(500 * time.Millisecond)
+    return nil
 }
 
-type WorkPool struct {
-    tasks       []Task
-    concurrency int
-    tasksChan   chan Task
-    wg          sync.WaitGroup
+// ResizeTask resizes an image
+type ResizeTask struct {
+    Filename string
+    Width    int
+    Height   int
 }
 
-func NewWorkPool(tasks []Task, concurrency int) *WorkPool {
-    return &WorkPool{
-        tasks:       tasks,
-        concurrency: concurrency,
+func (t *ResizeTask) Process() error {
+    fmt.Printf("resizing %s to %dx%d\n", t.Filename, t.Width, t.Height)
+    time.Sleep(200 * time.Millisecond)
+    return nil
+}
+
+// ReportTask generates a report
+type ReportTask struct {
+    ReportID string
+}
+
+func (t *ReportTask) Process() error {
+    fmt.Printf("generating report %s\n", t.ReportID)
+    time.Sleep(1 * time.Second)
+    return nil
+}
+
+func main() {
+    tasks := []pool.Task{
+        &EmailTask{To: "a@example.com", Subject: "Hello"},
+        &EmailTask{To: "b@example.com", Subject: "Hello"},
+        &ResizeTask{Filename: "photo.jpg", Width: 800, Height: 600},
+        &ResizeTask{Filename: "banner.png", Width: 1200, Height: 400},
+        &ReportTask{ReportID: "Q3-2024"},
     }
-}
 
-func (wp *WorkPool) worker(ctx context.Context) {
-    for {
-        select {
-        case task, ok := <-wp.tasksChan:
-            if !ok {
-                return
-            }
-            task.Process()
-            wp.wg.Done()
-        case <-ctx.Done():
-            return
+    wp := pool.NewWorkPool(tasks, 3)
+    errs := wp.Run(context.Background())
+
+    if len(errs) > 0 {
+        for _, err := range errs {
+            fmt.Println("error:", err)
         }
     }
-}
-
-func (wp *WorkPool) Run(ctx context.Context) {
-    wp.tasksChan = make(chan Task, len(wp.tasks))
-
-    for i := 0; i < wp.concurrency; i++ {
-        go wp.worker(ctx)
-    }
-
-    wp.wg.Add(len(wp.tasks))
-    for _, task := range wp.tasks {
-        wp.tasksChan <- task
-    }
-    close(wp.tasksChan)
-
-    wp.wg.Wait()
 }
