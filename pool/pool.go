@@ -1,51 +1,62 @@
-package main
+package pool
 
 import (
-	"fmt"
-	"sync"
-	"time"
+    "context"
+    "fmt"
+    "sync"
+    "time"
 )
 
-//Create Task
-	type Task struct{
-		ID int
-	}
-	//Process Task
-	func (t *Task) Process(){
-		fmt.Printf("The task id is %d",t.ID)
-		time.Sleep(2 * time.Second)
+type Task struct {
+    ID int
+}
 
-	}
-	//Workpool creation
-	type WorkPool struct{
-		Tasks 			[]Task
-		concurrency 	int
-		Taskschan 		chan Task
-		wg 				sync.WaitGroup
-	}
-	//Workpool execution
-	func (wp *WorkPool) worker(){
-		for task := range wp.Taskschan{
-			task.Process()
-			wp.wg.Done()
-		}
-	}
+func (t *Task) Process() {
+    fmt.Printf("processing task %d\n", t.ID)
+    time.Sleep(5 * time.Second)
+}
 
-	func (wp *WorkPool) Run(){
-		//Intialise the task channel
-		wp.Taskschan = make(chan Task,len(wp.Tasks))
+type WorkPool struct {
+    tasks       []Task
+    concurrency int
+    tasksChan   chan Task
+    wg          sync.WaitGroup
+}
 
-		//start workers
-		for i := 0;i<wp.concurrency;i++{
-			go wp.worker()
-		}
-		//Send task to the task channel
-		wp.wg.Add(len(wp.Tasks))
-		for _,task := range wp.Tasks{
-			wp.Taskschan <- task
-		}
-		close(wp.Taskschan)
+func NewWorkPool(tasks []Task, concurrency int) *WorkPool {
+    return &WorkPool{
+        tasks:       tasks,
+        concurrency: concurrency,
+    }
+}
 
-		//Wait all the tasks to be finished
-		wp.wg.Wait()
-	}
+func (wp *WorkPool) worker(ctx context.Context) {
+    for {
+        select {
+        case task, ok := <-wp.tasksChan:
+            if !ok {
+                return
+            }
+            task.Process()
+            wp.wg.Done()
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+
+func (wp *WorkPool) Run(ctx context.Context) {
+    wp.tasksChan = make(chan Task, len(wp.tasks))
+
+    for i := 0; i < wp.concurrency; i++ {
+        go wp.worker(ctx)
+    }
+
+    wp.wg.Add(len(wp.tasks))
+    for _, task := range wp.tasks {
+        wp.tasksChan <- task
+    }
+    close(wp.tasksChan)
+
+    wp.wg.Wait()
+}
