@@ -2,32 +2,50 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
-func worker(id int, jobs <-chan int, results chan<- int) {
-	for j := range jobs {
-		fmt.Println("worker",id,"started job",j)
-		time.Sleep(time.Second)
-		fmt.Println("Worker",id,"Has finished job",j)
-		results <- j * 2
+
+//Create Task
+	type Task struct{
+		ID int
+	}
+	//Process Task
+	func (t *Task) Process(){
+		fmt.Printf("The task id is %d",t.ID)
+		time.Sleep(2 * time.Second)
 
 	}
-}
-
-func main() {
-	const numJobs = 5
-	jobs := make(chan int, numJobs)
-	results := make(chan int, numJobs)
-
-	for w := 1;w<=3;w++{
-		go worker(w,jobs,results)
+	//Workpool creation
+	type WorkPool struct{
+		Tasks 			[]Task
+		concurrency 	int
+		Taskschan 		chan Task
+		wg 				sync.WaitGroup
+	}
+	//Workpool execution
+	func (wp *WorkPool) worker(){
+		for task := range wp.Taskschan{
+			task.Process()
+			wp.wg.Done()
+		}
 	}
 
-	for j := 1;j<=numJobs;j++{
-		jobs <- j
+	func (wp *WorkPool) Run(){
+		//Intialise the task channel
+		wp.Taskschan = make(chan Task,len(wp.Tasks))
+
+		//start workers
+		for i := 0;i<wp.concurrency;i++{
+			go wp.worker()
+		}
+		//Send task to the task channel
+		wp.wg.Add(len(wp.Tasks))
+		for _,task := range wp.Tasks{
+			wp.Taskschan <- task
+		}
+		close(wp.Taskschan)
+
+		//Wait all the tasks to be finished
+		wp.wg.Wait()
 	}
-	close(jobs)
-	for a := 1;a<= numJobs;a++{
-		<-results
-	}
-}
