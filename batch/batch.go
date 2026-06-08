@@ -1,3 +1,4 @@
+//For batching two or more messages/data/values flowing around the pipeline
 package batch
 
 import (
@@ -6,12 +7,16 @@ import (
 
 	ferrors "FlowChan/errors"
 )
+//A batch stage collects individual items and groups them together before passing downstream. Two triggers flush a batch:
 
+// 1. Size — batch hits N items, send it
+// 2.Timeout — not enough items came in but time ran out, send whatever you have
 type Batcher[T any] struct {
 	size    int
 	timeout time.Duration
 }
 
+//The New function creates a Batcher instance and returns a pointer to it so its methods can be used without copying the struct.
 func New[T any](size int, timeout time.Duration) *Batcher[T] {
 	return &Batcher[T]{
 		size:    size,
@@ -19,6 +24,9 @@ func New[T any](size int, timeout time.Duration) *Batcher[T] {
 	}
 }
 
+
+//ctx context.Context → used for cancellation.
+//in <-chan T → receive-only channel from which items arrive.
 func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan ferrors.Result[[]T] {
 	out := make(chan ferrors.Result[[]T], 1)
 
