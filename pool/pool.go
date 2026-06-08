@@ -1,66 +1,75 @@
 package pool
 
 import (
-    "context"
-    "sync"
+	"context"
+	"sync"
 )
 
 type Task interface {
-    Process() error
+	Process() error
 }
 
 type WorkPool struct {
-    tasks       []Task
-    concurrency int
-    tasksChan   chan Task
-    errors      chan error
-    wg          sync.WaitGroup
+	tasks       []Task
+	concurrency int
+	tasksChan   chan Task
+	errors      chan error
 }
 
 func NewWorkPool(tasks []Task, concurrency int) *WorkPool {
-    return &WorkPool{
-        tasks:       tasks,
-        concurrency: concurrency,
-        errors:      make(chan error, len(tasks)),
-    }
+	return &WorkPool{
+		tasks:       tasks,
+		concurrency: concurrency,
+		errors:      make(chan error, len(tasks)),
+	}
 }
 
-func (wp *WorkPool) worker(ctx context.Context) {
-    for {
-        select {
-        case task, ok := <-wp.tasksChan:
-            if !ok {
-                return
-            }
-            if err := task.Process(); err != nil {
-                wp.errors <- err
-            }
-            wp.wg.Done()
-        case <-ctx.Done():
-            return
-        }
-    }
+func (wp *WorkPool) worker(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done() // called when worker exits for ANY reason
+	for {
+		select {
+		case task, ok := <-wp.tasksChan:
+			if !ok {
+				return
+			}
+			if err := task.Process(); err != nil {
+				wp.errors <- err
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (wp *WorkPool) Run(ctx context.Context) []error {
-    wp.tasksChan = make(chan Task, len(wp.tasks))
+	wp.tasksChan = make(chan Task, len(wp.tasks))
 
-    for i := 0; i < wp.concurrency; i++ {
-        go wp.worker(ctx)
-    }
+	// WaitGroup tracks WORKERS not tasks
+	var wg sync.WaitGroup
+	for i := 0; i < wp.concurrency; i++ {
+		wg.Add(1)
+		go wp.worker(ctx, &wg)
+	}
 
-    wp.wg.Add(len(wp.tasks))
-    for _, task := range wp.tasks {
-        wp.tasksChan <- task
-    }
-    close(wp.tasksChan)
+	// send jobs
+	go func() {
+		defer close(wp.tasksChan)
+		for _, task := range wp.tasks {
+			select {
+			case wp.tasksChan <- task:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
-    wp.wg.Wait()
-    close(wp.errors)
+	// wait for all workers to finish then close errors
+	wg.Wait()
+	close(wp.errors)
 
-    var errs []error
-    for err := range wp.errors {
-        errs = append(errs, err)
-    }
-    return errs
+	var errs []error
+	for err := range wp.errors {
+		errs = append(errs, err)
+	}
+	return errs
 }
