@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	ferrors "FlowChan/errors"
 )
@@ -100,6 +101,37 @@ func TestChain_TwoStages(t *testing.T) {
 	for _, r := range results {
 		if r.IsErr() {
 			t.Errorf("unexpected error: %v", r.Err)
+		}
+	}
+}
+
+func TestOrderedStage_PreservesOrder(t *testing.T) {
+	stage := NewOrderedStage(5, func(ctx context.Context, n int) (int, error) {
+		// simulate variable processing time to scramble natural order
+		time.Sleep(time.Duration(10-n) * time.Millisecond)
+		return n * 10, nil
+	})
+
+	in := make(chan int, 5)
+	go func() {
+		defer close(in)
+		for i := 1; i <= 5; i++ {
+			in <- i
+		}
+	}()
+
+	var results []int
+	for r := range stage.Run(context.Background(), in) {
+		if r.IsErr() {
+			t.Fatal("unexpected error:", r.Err)
+		}
+		results = append(results, r.Value)
+	}
+
+	expected := []int{10, 20, 30, 40, 50}
+	for i, v := range results {
+		if v != expected[i] {
+			t.Errorf("position %d: expected %d got %d", i, expected[i], v)
 		}
 	}
 }
