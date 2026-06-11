@@ -10,6 +10,7 @@ import (
 	"FlowChan/pipeline"
 	"FlowChan/pool"
 	"FlowChan/stream"
+	"FlowChan/termination"
 )
 
 // --- pool tasks ---
@@ -20,7 +21,7 @@ type EmailTask struct {
 }
 
 func (t *EmailTask) Process() error {
-	fmt.Printf("  [email] sending to %s: %s\n", t.To, t.Subject)
+	fmt.Printf("  [email] sending to %s\n", t.To)
 	time.Sleep(100 * time.Millisecond)
 	return nil
 }
@@ -32,8 +33,23 @@ type ResizeTask struct {
 }
 
 func (t *ResizeTask) Process() error {
-	fmt.Printf("  [resize] %s → %dx%d\n", t.Filename, t.Width, t.Height)
-	time.Sleep(50 * time.Millisecond)
+	fmt.Printf("  [resize] %s to %dx%d\n", t.Filename, t.Width, t.Height)
+	return nil
+}
+
+// flakyTask fails the first two attempts then succeeds
+type flakyTask struct {
+	name     string
+	attempts int
+}
+
+func (t *flakyTask) Process() error {
+	t.attempts++
+	if t.attempts < 3 {
+		fmt.Printf("  [flaky] %s attempt %d failed\n", t.name, t.attempts)
+		return fmt.Errorf("temporary failure")
+	}
+	fmt.Printf("  [flaky] %s succeeded on attempt %d\n", t.name, t.attempts)
 	return nil
 }
 
@@ -41,51 +57,53 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	fmt.Println("━━━ 1. Worker Pool ━━━")
+	fmt.Println("━━━ 1. Worker Pool with Retries ━━━")
 	runPool(ctx)
 
-	fmt.Println("\n━━━ 2. Pipeline ━━━")
-	runPipeline(ctx)
+	fmt.Println("\n━━━ 2. Pipeline - Ordered Stage ━━━")
+	runOrderedPipeline(ctx)
 
-	fmt.Println("\n━━━ 3. Batch ━━━")
+	fmt.Println("\n━━━ 3. Batch - Fixed Size + Timeout ━━━")
 	runBatch(ctx)
 
-	fmt.Println("\n━━━ 4. Stream FlatMap ━━━")
+	fmt.Println("\n━━━ 4. Batch - Realtime Sliding Window ━━━")
+	runRealtimeBatch(ctx)
+
+	fmt.Println("\n━━━ 5. Stream - FlatMap ━━━")
 	runFlatMap(ctx)
 
-	fmt.Println("\n━━━ 5. Iterators ━━━")
+	fmt.Println("\n━━━ 6. Stream - Backpressure ━━━")
+	runBackpressure(ctx)
+
+	fmt.Println("\n━━━ 7. Iterators ━━━")
 	runIter(ctx)
+
+	fmt.Println("\n━━━ 8. Graceful Termination ━━━")
+	runTermination()
 }
 
 func runPool(ctx context.Context) {
 	tasks := []pool.Task{
 		&EmailTask{To: "alice@example.com", Subject: "Welcome"},
-		&EmailTask{To: "bob@example.com", Subject: "Update"},
 		&ResizeTask{Filename: "photo.jpg", Width: 800, Height: 600},
-		&ResizeTask{Filename: "banner.png", Width: 1200, Height: 400},
+		&flakyTask{name: "report-job"},
 	}
 
-	wp := pool.NewWorkPool(tasks, 3)
+	wp := pool.NewWorkPool(tasks, 3, pool.WithRetries(3))
 	errs := wp.Run(ctx)
 	if len(errs) > 0 {
-		fmt.Println("errors:", errs)
+		fmt.Println("  errors:", errs)
 	} else {
-		fmt.Println("  all tasks completed")
+		fmt.Println("  all tasks completed successfully")
 	}
 }
 
-func runPipeline(ctx context.Context) {
-	// stage 1: double the number
-	stage1 := pipeline.NewStage(3, func(ctx context.Context, n int) (int, error) {
-		fmt.Printf("  [stage1] %d → %d\n", n, n*2)
-		return n * 2, nil
-	})
-
-	// stage 2: format as string
-	stage2 := pipeline.NewStage(3, func(ctx context.Context, n int) (string, error) {
-		result := fmt.Sprintf("item-%d", n)
-		fmt.Printf("  [stage2] %d → %s\n", n, result)
-		return result, nil
+func runOrderedPipeline(ctx context.Context) {
+	// items processed concurrently but output order is guaranteed
+	stage := pipeline.NewOrderedStage(5, func(ctx context.Context, n int) (string, error) {
+		// simulate variable processing time
+		time.Sleep(time.Duration(10-n) * time.Millisecond)
+		return fmt.Sprintf("item-%d", n*10), nil
 	})
 
 	in := make(chan int, 5)
@@ -96,13 +114,13 @@ func runPipeline(ctx context.Context) {
 		}
 	}()
 
-	p := pipeline.Chain(stage1, stage2)
-	for r := range p.Run(ctx, in) {
+	fmt.Println("  output (should be item-10 through item-50 in order):")
+	for r := range stage.Run(ctx, in) {
 		if r.IsErr() {
 			fmt.Println("  error:", r.Err)
 			continue
 		}
-		fmt.Println("  final:", r.Value)
+		fmt.Println(" ", r.Value)
 	}
 }
 
@@ -125,6 +143,34 @@ func runBatch(ctx context.Context) {
 	}
 }
 
+func runRealtimeBatch(ctx context.Context) {
+	in := make(chan int)
+	go func() {
+		defer close(in)
+		// burst of 3 items
+		for i := 1; i <= 3; i++ {
+			in <- i
+		}
+		// silence - sliding window fires
+		time.Sleep(200 * time.Millisecond)
+		// another burst
+		for i := 4; i <= 6; i++ {
+			in <- i
+		}
+		// silence - sliding window fires again
+		time.Sleep(200 * time.Millisecond)
+	}()
+
+	b := batch.NewRealtime[int](100, 100*time.Millisecond)
+	for r := range b.Run(ctx, in) {
+		if r.IsErr() {
+			fmt.Println("  error:", r.Err)
+			continue
+		}
+		fmt.Println("  realtime batch:", r.Value)
+	}
+}
+
 func runFlatMap(ctx context.Context) {
 	in := make(chan int, 3)
 	go func() {
@@ -134,7 +180,6 @@ func runFlatMap(ctx context.Context) {
 		in <- 3
 	}()
 
-	// each number expands into [n, n*10, n*100]
 	out := stream.FlatMap(ctx, in, 2,
 		func(ctx context.Context, n int) ([]int, error) {
 			return []int{n, n * 10, n * 100}, nil
@@ -149,20 +194,74 @@ func runFlatMap(ctx context.Context) {
 	}
 }
 
+func runBackpressure(ctx context.Context) {
+	in := make(chan int, 20)
+	go func() {
+		defer close(in)
+		for i := 1; i <= 10; i++ {
+			in <- i
+		}
+	}()
+
+	// only 3 items in-flight at once regardless of input size
+	out := stream.BackpressureMap(ctx, in, 3,
+		func(ctx context.Context, n int) (int, error) {
+			time.Sleep(20 * time.Millisecond)
+			return n * 2, nil
+		})
+
+	fmt.Println("  results (max 3 concurrent):")
+	for r := range out {
+		if r.IsErr() {
+			fmt.Println("  error:", r.Err)
+			continue
+		}
+		fmt.Println(" ", r.Value)
+	}
+}
+
 func runIter(ctx context.Context) {
-	ch := make(chan int, 5)
+	ch := make(chan int, 10)
 	go func() {
 		defer close(ch)
-		for i := 1; i <= 5; i++ {
+		for i := 1; i <= 10; i++ {
 			ch <- i
 		}
 	}()
 
-	// chain: fromChan → filter evens → double → collect
 	seq := iter.FromChan(ctx, ch)
 	evens := iter.Filter(seq, func(n int) bool { return n%2 == 0 })
 	doubled := iter.Map(evens, func(n int) int { return n * 2 })
 	results := iter.Collect(doubled)
 
 	fmt.Println("  evens doubled:", results)
+}
+
+func runTermination() {
+	term := termination.New()
+
+	// simulate 5 in-flight workers
+	for i := 1; i <= 5; i++ {
+		if !term.Track() {
+			fmt.Println("  rejected - already stopped")
+			continue
+		}
+		workerID := i
+		go func() {
+			defer term.Done()
+			time.Sleep(100 * time.Millisecond)
+			fmt.Printf("  worker %d finished\n", workerID)
+		}()
+	}
+
+	// signal stop after 50ms - workers are still running
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		fmt.Println("  stop signal sent")
+		term.Stop()
+	}()
+
+	// Wait blocks until stop is called AND all workers drain
+	term.Wait()
+	fmt.Println("  all in-flight work drained, shutdown complete")
 }
