@@ -1,6 +1,6 @@
 # FlowChan
 
-A concurrent programming library for Go. FlowChan gives you worker pools, pipelines, batching, streaming, and iterators — so you write the logic, not the boilerplate.
+A concurrent programming library for Go. FlowChan gives you worker pools, pipelines, batching, streaming, and iterators - so you write the logic, not the boilerplate.
 
 ```bash
 go get github.com/Atul-Koundal/FlowChan
@@ -10,7 +10,7 @@ go get github.com/Atul-Koundal/FlowChan
 
 ## Why FlowChan
 
-Writing concurrent Go by hand means repeating the same patterns every time — goroutine lifecycle, WaitGroups, channel fan-out, error propagation, context cancellation. FlowChan wraps all of that so your code looks like this:
+Writing concurrent Go by hand means repeating the same patterns every time - goroutine lifecycle, WaitGroups, channel fan-out, error propagation, context cancellation. FlowChan wraps all of that so your code looks like this:
 
 ```go
 wp := pool.NewWorkPool(tasks, 3)
@@ -109,7 +109,7 @@ func main() {
 
 ### Pipeline
 
-Chain stages together — the output of one stage becomes the input of the next. Each stage runs concurrently with its own worker count.
+Chain stages together - the output of one stage becomes the input of the next. Each stage runs concurrently with its own worker count.
 
 ```go
 // stage 1: parse raw strings into numbers
@@ -142,7 +142,7 @@ for r := range p.Run(ctx, in) {
 
 ### Batching
 
-Group items into batches before processing. Flushes when the batch hits `size` items or `timeout` elapses — whichever comes first.
+Group items into batches before processing. Flushes when the batch hits `size` items or `timeout` elapses - whichever comes first.
 
 ```go
 b := batch.New[int](3, 500*time.Millisecond)
@@ -184,12 +184,12 @@ for r := range out {
 Transform items concurrently. Use `Map` when order doesn't matter, `OrderedMap` when it does.
 
 ```go
-// unordered — faster
+// unordered - faster
 out := stream.Map(ctx, in, 5, func(ctx context.Context, url string) ([]byte, error) {
     return fetch(url)
 })
 
-// ordered — preserves input sequence
+// ordered - preserves input sequence
 out := stream.OrderedMap(ctx, in, 5, func(ctx context.Context, url string) ([]byte, error) {
     return fetch(url)
 })
@@ -197,7 +197,7 @@ out := stream.OrderedMap(ctx, in, 5, func(ctx context.Context, url string) ([]by
 
 ### Iterators
 
-Consume any channel-based output using composable iterators — no manual channel loops.
+Consume any channel-based output using composable iterators - no manual channel loops.
 
 ```go
 seq := iter.FromChan(ctx, numbersChan)
@@ -216,7 +216,7 @@ fmt.Println(result) // all even numbers, doubled
 
 ## Result type
 
-Every concurrent operation in FlowChan returns `chan Result[T]`. This carries either a value or an error — never just one or the other — so errors are never silently dropped.
+Every concurrent operation in FlowChan returns `chan Result[T]`. This carries either a value or an error - never just one or the other - so errors are never silently dropped.
 
 ```go
 for r := range out {
@@ -278,9 +278,9 @@ All packages are tested with the `-race` flag to catch data races.
 ```
 flowchan/
 ├── go.mod
-├── pool/            # task runner — Task interface, WorkPool
-├── errors/          # Result[T] type — value + error carrier
-├── pipeline/        # Stage[In,Out], Chain — transform pipelines
+├── pool/            # task runner - Task interface, WorkPool
+├── errors/          # Result[T] type - value + error carrier
+├── pipeline/        # Stage[In,Out], Chain - transform pipelines
 ├── batch/           # size + timeout batching
 ├── stream/          # Map, OrderedMap, FlatMap
 ├── iter/            # Seq iterators, Filter, Map, Collect
@@ -291,7 +291,7 @@ flowchan/
 
 ## What's coming
 
-- Graceful termination — drain in-flight work before shutdown
+- Graceful termination - drain in-flight work before shutdown
 - Error propagation through chained pipeline stages
 - Real-time batching with sliding windows
 - Backpressure for parallel streaming
@@ -301,9 +301,9 @@ flowchan/
 
 ## Inspired by
 
-- [sourcegraph/conc](https://github.com/sourcegraph/conc) — structured concurrency for Go
-- [panjf2000/ants](https://github.com/panjf2000/ants) — goroutine pool
-- [reugn/go-streams](https://github.com/reugn/go-streams) — stream processing
+- [sourcegraph/conc](https://github.com/sourcegraph/conc) - structured concurrency for Go
+- [panjf2000/ants](https://github.com/panjf2000/ants) - goroutine pool
+- [reugn/go-streams](https://github.com/reugn/go-streams) - stream processing
 
 ---
 
