@@ -11,6 +11,13 @@ import (
 
 // 1. Size — batch hits N items, send it
 // 2.Timeout — not enough items came in but time ran out, send whatever you have
+
+
+//Yet to work on these comments......
+// Batch groups items from an input channel into batches based on a maximum size and a timeout.
+// A batch is emitted when it reaches the maximum size, the timeout expires, or the input channel closes.
+// This function never emits empty batches. The timeout countdown starts when the first item is added to a new batch.
+// To emit batches only when full, set the timeout to -1. Zero timeout is not supported and will panic
 type Batcher[T any] struct {
 	size    int
 	timeout time.Duration
