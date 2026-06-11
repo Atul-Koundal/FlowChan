@@ -7,6 +7,11 @@ import (
 	ferrors "FlowChan/errors"
 )
 
+//Parallel map with a safety valve.
+//  Without backpressure, a fast producer feeding slow workers fills memory with unbounded in-flight items.
+//  This file uses a semaphore to cap how many items are being processed at once, when all worker 
+//slots are full, reading from the input channel blocks naturally, slowing the producer down.
+
 // BackpressureMap processes items concurrently but slows the producer
 // when workers are busy, preventing unbounded memory growth.
 func BackpressureMap[In, Out any](
