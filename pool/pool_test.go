@@ -6,6 +6,7 @@ import (
     "sync/atomic"
     "testing"
     "time"
+    "fmt"
 )
 
 // --- test task types ---
@@ -132,4 +133,48 @@ func (t *trackingTask) Process() error {
     time.Sleep(50 * time.Millisecond)
     t.active.Add(-1)
     return nil
+}
+
+func TestRetries_EventualSuccess(t *testing.T) {
+	attempts := 0
+	// task fails first 2 times, succeeds on 3rd
+	task := &funcTask{fn: func() error {
+		attempts++
+		if attempts < 3 {
+			return fmt.Errorf("temporary failure")
+		}
+		return nil
+	}}
+
+	wp := NewWorkPool([]Task{task}, 1, WithRetries(3))
+	errs := wp.Run(context.Background())
+
+	if len(errs) != 0 {
+		t.Fatalf("expected success after retries, got: %v", errs)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestRetries_ExhaustedReturnsError(t *testing.T) {
+	task := &funcTask{fn: func() error {
+		return fmt.Errorf("always fails")
+	}}
+
+	wp := NewWorkPool([]Task{task}, 1, WithRetries(2))
+	errs := wp.Run(context.Background())
+
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error after retries exhausted, got %d", len(errs))
+	}
+}
+
+// funcTask lets us pass a closure as a Task in tests
+type funcTask struct {
+	fn func() error
+}
+
+func (t *funcTask) Process() error {
+	return t.fn()
 }
