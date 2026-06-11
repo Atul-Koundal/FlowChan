@@ -5,6 +5,12 @@ import (
 	"sync"
 )
 
+//raceful shutdown coordinator.
+//  When you call Stop(), no new work is accepted.
+//  Wait() then blocks until all currently in-flight work finishes before returning.
+//  Without this, a naive cancel() would kill goroutines mid-work,
+//  potentially leaving data in a corrupt or incomplete state.
+
 // Terminator manages graceful shutdown - signals stop,
 // waits for in-flight work to drain before returning.
 type Terminator struct {
