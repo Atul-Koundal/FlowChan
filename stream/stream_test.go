@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
+	"sync/atomic"
 )
 
 func toChan[T any](items ...T) <-chan T {
@@ -158,5 +160,60 @@ func TestFlatMap_EmptyExpansion(t *testing.T) {
 	sort.Ints(results)
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+}
+
+func TestBackpressureMap_LimitsInFlight(t *testing.T) {
+	var active atomic.Int32
+	var maxSeen atomic.Int32
+
+	in := make(chan int, 20)
+	go func() {
+		defer close(in)
+		for i := 0; i < 20; i++ {
+			in <- i
+		}
+	}()
+
+	out := BackpressureMap(context.Background(), in, 3,
+		func(ctx context.Context, n int) (int, error) {
+			current := active.Add(1)
+			// track peak concurrency
+			for {
+				seen := maxSeen.Load()
+				if current <= seen || maxSeen.CompareAndSwap(seen, current) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			active.Add(-1)
+			return n * 2, nil
+		})
+
+	for range out {
+	}
+
+	if maxSeen.Load() > 3 {
+		t.Errorf("backpressure failed: %d workers ran simultaneously, limit is 3", maxSeen.Load())
+	}
+}
+
+func TestBackpressureMap_Cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	in := make(chan int, 5)
+	for i := 0; i < 5; i++ {
+		in <- i
+	}
+	close(in)
+
+	out := BackpressureMap(ctx, in, 3,
+		func(ctx context.Context, n int) (int, error) {
+			return n, nil
+		})
+
+	// should not hang
+	for range out {
 	}
 }
