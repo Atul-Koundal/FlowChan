@@ -49,8 +49,8 @@ for i := 0; i < 3; i++ {
 | `batch` | Group items by size or timeout |
 | `stream` | FlatMap, parallel map, ordered map |
 | `iter` | Consume results with filters, maps, and collectors |
-
----
+|`termination`| Graceful shutdown/drain in-flight work before stopping |
+--- 
 
 ## Quick start
 
@@ -140,6 +140,20 @@ for r := range p.Run(ctx, in) {
 }
 ```
 
+### Ordered pipeline
+
+When output order must match input order, use NewOrderedStage. Items are processed concurrently but held in a buffer and released in the original sequence.
+
+```go
+gostage := pipeline.NewOrderedStage(5, func(ctx context.Context, n int) (string, error) {
+    return fmt.Sprintf("item-%d", n*10), nil
+})
+
+for r := range stage.Run(ctx, in) {
+    fmt.Println(r.Value) // always item-10, item-20, item-30...
+}
+```
+
 ### Batching
 
 Group items into batches before processing. Flushes when the batch hits `size` items or `timeout` elapses - whichever comes first.
@@ -161,6 +175,18 @@ for r := range b.Run(ctx, in) {
         continue
     }
     fmt.Println("batch:", r.Value) // [1 2 3], [4 5 6], [7 8 9], [10]
+}
+```
+
+### Realtime batching
+
+Uses a sliding window instead of a fixed ticker. The window resets on every new item. Only flushes when no items arrive for the full window duration. Useful for event streams where you want to wait for a burst to settle.
+
+```go
+gob := batch.NewRealtime[int](100, 100*time.Millisecond)
+
+for r := range b.Run(ctx, in) {
+    fmt.Println("batch:", r.Value)
 }
 ```
 
@@ -193,6 +219,41 @@ out := stream.Map(ctx, in, 5, func(ctx context.Context, url string) ([]byte, err
 out := stream.OrderedMap(ctx, in, 5, func(ctx context.Context, url string) ([]byte, error) {
     return fetch(url)
 })
+```
+
+### Backpressure
+
+Parallel map with a concurrency cap. When all worker slots are full, reading from the input channel blocks naturally, slowing the producer down and preventing unbounded memory growth.
+```go
+goout := stream.BackpressureMap(ctx, in, 3,
+    func(ctx context.Context, n int) (int, error) {
+        return process(n)
+    })
+
+for r := range out {
+    fmt.Println(r.Value)
+}
+```
+
+### Graceful termination
+
+Signal shutdown and wait for all in-flight work to drain before the program exits. No work is cut off mid-execution.
+
+```go
+goterm := termination.New()
+
+for i := 0; i < 5; i++ {
+    if !term.Track() {
+        continue // already stopped, do not start new work
+    }
+    go func() {
+        defer term.Done()
+        doWork()
+    }()
+}
+
+term.Stop() // signal shutdown - no new work accepted
+term.Wait() // blocks until all in-flight goroutines call Done()
 ```
 
 ### Iterators
@@ -278,24 +339,44 @@ All packages are tested with the `-race` flag to catch data races.
 ```
 flowchan/
 ├── go.mod
-├── pool/            # task runner - Task interface, WorkPool
-├── errors/          # Result[T] type - value + error carrier
-├── pipeline/        # Stage[In,Out], Chain - transform pipelines
-├── batch/           # size + timeout batching
-├── stream/          # Map, OrderedMap, FlatMap
-├── iter/            # Seq iterators, Filter, Map, Collect
-└── example/         # end-to-end usage examples
+├── pool/               # Task interface, WorkPool, retries
+├── errors/             # Result[T] - value + error carrier
+├── pipeline/
+│   ├── stage.go        # Stage[In,Out], Chain
+│   └── ordered.go      # OrderedStage - preserves input order
+├── batch/
+│   ├── batch.go        # fixed size + timeout batching
+│   └── realtime.go     # sliding window realtime batching
+├── stream/
+│   ├── stream.go       # Map, OrderedMap, FlatMap
+│   └── backpressure.go # BackpressureMap - concurrency cap
+├── termination/        # graceful shutdown, drain in-flight work
+├── iter/               # Seq iterators, Filter, Map, Collect
+└── example/            # end-to-end usage of all packages
 ```
+
+### Dependency order
+
+Packages only depend downward. Nothing in pool imports pipeline. Nothing imports iter.
+
+```
+iter
+  |
+pool  pipeline  batch  stream  termination
+  |       |       |      |
+         errors
+```
+
+This means any package can be used independently without pulling in the rest of the library.
 
 ---
 
 ## What's coming
 
-- Graceful termination - drain in-flight work before shutdown
-- Error propagation through chained pipeline stages
-- Real-time batching with sliding windows
-- Backpressure for parallel streaming
-- Goroutine reuse and pool resizing
+Error propagation through chained pipeline stages
+Goroutine reuse and pool resizing
+Metrics and observability hooks
+Rate limiting stage
 
 ---
 
