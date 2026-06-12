@@ -10,6 +10,8 @@ import (
 	ferrors "FlowChan/errors"
 )
 //Backoff strategy is used when the probe fails to establish a connection or loses an existing connection
+//The probe tries to reestablish a connection after one second, two seconds, then four seconds, and so on
+//The backoff strategy remains in place until a successful login occurs.
 
 
 // BackoffStrategy takes the attempt number (starting at 0)
