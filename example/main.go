@@ -57,28 +57,28 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	fmt.Println("━━━ 1. Worker Pool with Retries ━━━")
+	fmt.Println("^^^^^ 1. Worker Pool with Retries ^^^^^")
 	runPool(ctx)
 
-	fmt.Println("\n━━━ 2. Pipeline - Ordered Stage ━━━")
+	fmt.Println("\n^^^^^ 2. Pipeline - Ordered Stage ^^^^^")
 	runOrderedPipeline(ctx)
 
-	fmt.Println("\n━━━ 3. Batch - Fixed Size + Timeout ━━━")
+	fmt.Println("\n^^^^^ 3. Batch - Fixed Size + Timeout ^^^^^")
 	runBatch(ctx)
 
-	fmt.Println("\n━━━ 4. Batch - Realtime Sliding Window ━━━")
+	fmt.Println("\n^^^^^ 4. Batch - Realtime Sliding Window ^^^^^")
 	runRealtimeBatch(ctx)
 
-	fmt.Println("\n━━━ 5. Stream - FlatMap ━━━")
+	fmt.Println("\n^^^^^ 5. Stream - FlatMap ^^^^^")
 	runFlatMap(ctx)
 
-	fmt.Println("\n━━━ 6. Stream - Backpressure ━━━")
+	fmt.Println("\n^^^^^ 6. Stream - Backpressure ^^^^^")
 	runBackpressure(ctx)
 
-	fmt.Println("\n━━━ 7. Iterators ━━━")
+	fmt.Println("\n^^^^^ 7. Iterators ^^^^^")
 	runIter(ctx)
 
-	fmt.Println("\n━━━ 8. Graceful Termination ━━━")
+	fmt.Println("\n^^^^^ 8. Graceful Termination ^^^^^")
 	runTermination()
 }
 
