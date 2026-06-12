@@ -47,9 +47,13 @@ func ExponentialJitter(base, max time.Duration) BackoffStrategy {
 		if exp > max {
 			exp = max
 		}
-		// jitter is up to 20% of the wait in either direction
+		// jitter is up to 20% of exp, but final value must not exceed max
 		jitter := time.Duration(rand.Int63n(int64(exp / 5)))
-		return exp + jitter
+		wait := exp + jitter
+		if wait > max {
+			return max
+		}
+		return wait
 	}
 }
 
