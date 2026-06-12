@@ -11,6 +11,7 @@ import (
 	"FlowChan/pool"
 	"FlowChan/stream"
 	"FlowChan/termination"
+	"FlowChan/retry"
 )
 
 // --- pool tasks ---
@@ -80,6 +81,9 @@ func main() {
 
 	fmt.Println("\n^^^^^ 8. Graceful Termination ^^^^^")
 	runTermination()
+
+	fmt.Println("\n^^^^^ 9. Retry with Backoff ^^^^^")
+	runRetry(ctx)
 }
 
 func runPool(ctx context.Context) {
@@ -254,6 +258,8 @@ func runTermination() {
 		}()
 	}
 
+	
+
 	// signal stop after 50ms - workers are still running
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -264,4 +270,36 @@ func runTermination() {
 	// Wait blocks until stop is called AND all workers drain
 	term.Wait()
 	fmt.Println("  all in-flight work drained, shutdown complete")
+}
+
+func runRetry(ctx context.Context) {
+	in := make(chan int, 5)
+	go func() {
+		defer close(in)
+		for i := 1; i <= 5; i++ {
+			in <- i
+		}
+	}()
+
+	attempts := make(map[int]int)
+
+	out := retry.Stream(ctx, in, 4,
+		retry.ExponentialJitter(10*time.Millisecond, 100*time.Millisecond),
+		func(ctx context.Context, n int) (int, error) {
+			attempts[n]++
+			if attempts[n] < 3 {
+				fmt.Printf("  item %d attempt %d failed\n", n, attempts[n])
+				return 0, fmt.Errorf("temporary failure")
+			}
+			fmt.Printf("  item %d succeeded on attempt %d\n", n, attempts[n])
+			return n * 2, nil
+		})
+
+	for r := range out {
+		if r.IsErr() {
+			fmt.Println("  final error:", r.Err)
+			continue
+		}
+		fmt.Println("  result:", r.Value)
+	}
 }
