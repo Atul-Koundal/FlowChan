@@ -9,7 +9,7 @@ import (
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
-// helper — sends items into a channel and closes it
+// helper - sends items into a channel and closes it
 func toChan[T any](items ...T) <-chan T {
 	ch := make(chan T, len(items))
 	for _, item := range items {
@@ -19,7 +19,7 @@ func toChan[T any](items ...T) <-chan T {
 	return ch
 }
 
-// helper — collects all results from a channel into a slice
+// helper - collects all results from a channel into a slice
 func collect[T any](ch <-chan ferrors.Result[T]) []ferrors.Result[T] {
 	var results []ferrors.Result[T]
 	for r := range ch {
@@ -70,23 +70,21 @@ func TestStage_ErrorPropagation(t *testing.T) {
 
 func TestStage_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	stage := NewStage(3, func(ctx context.Context, n int) (int, error) {
 		return n * 2, nil
 	})
 
 	out := stage.Run(ctx, toChan(1, 2, 3, 4, 5))
-	collect(out) // should not hang
+	collect(out)
 }
 
 func TestChain_TwoStages(t *testing.T) {
-	// stage 1: multiply by 2
 	stage1 := NewStage(2, func(ctx context.Context, n int) (int, error) {
 		return n * 2, nil
 	})
 
-	// stage 2: convert to string
 	stage2 := NewStage(2, func(ctx context.Context, n int) (string, error) {
 		return fmt.Sprintf("value-%d", n), nil
 	})
@@ -101,37 +99,6 @@ func TestChain_TwoStages(t *testing.T) {
 	for _, r := range results {
 		if r.IsErr() {
 			t.Errorf("unexpected error: %v", r.Err)
-		}
-	}
-}
-
-func TestOrderedStage_PreservesOrder(t *testing.T) {
-	stage := NewOrderedStage(5, func(ctx context.Context, n int) (int, error) {
-		// simulate variable processing time to scramble natural order
-		time.Sleep(time.Duration(10-n) * time.Millisecond)
-		return n * 10, nil
-	})
-
-	in := make(chan int, 5)
-	go func() {
-		defer close(in)
-		for i := 1; i <= 5; i++ {
-			in <- i
-		}
-	}()
-
-	var results []int
-	for r := range stage.Run(context.Background(), in) {
-		if r.IsErr() {
-			t.Fatal("unexpected error:", r.Err)
-		}
-		results = append(results, r.Value)
-	}
-
-	expected := []int{10, 20, 30, 40, 50}
-	for i, v := range results {
-		if v != expected[i] {
-			t.Errorf("position %d: expected %d got %d", i, expected[i], v)
 		}
 	}
 }
@@ -234,5 +201,35 @@ func TestStage_Metrics(t *testing.T) {
 	}
 	if snap.Active != 0 {
 		t.Errorf("expected 0 active after completion, got %d", snap.Active)
+	}
+}
+
+func TestOrderedStage_PreservesOrder(t *testing.T) {
+	stage := NewOrderedStage(5, func(ctx context.Context, n int) (int, error) {
+		time.Sleep(time.Duration(10-n) * time.Millisecond)
+		return n * 10, nil
+	})
+
+	in := make(chan int, 5)
+	go func() {
+		defer close(in)
+		for i := 1; i <= 5; i++ {
+			in <- i
+		}
+	}()
+
+	var results []int
+	for r := range stage.Run(context.Background(), in) {
+		if r.IsErr() {
+			t.Fatal("unexpected error:", r.Err)
+		}
+		results = append(results, r.Value)
+	}
+
+	expected := []int{10, 20, 30, 40, 50}
+	for i, v := range results {
+		if v != expected[i] {
+			t.Errorf("position %d: expected %d got %d", i, expected[i], v)
+		}
 	}
 }
