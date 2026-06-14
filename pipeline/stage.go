@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 // Stage represents a single unit of work in the pipeline.

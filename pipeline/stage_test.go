@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 // helper — sends items into a channel and closes it

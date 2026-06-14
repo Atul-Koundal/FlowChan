@@ -3,7 +3,7 @@ package iter
 import (
 	"context"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 // Seq is a push iterator — calls yield for each item until yield returns false.

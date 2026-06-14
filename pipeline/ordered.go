@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 //Same as a stage but guarantees output order matches input order. 

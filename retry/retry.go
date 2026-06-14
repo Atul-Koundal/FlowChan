@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"time"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 //Backoff strategy is used when the probe fails to establish a connection or loses an existing connection
 //The probe tries to reestablish a connection after one second, two seconds, then four seconds, and so on

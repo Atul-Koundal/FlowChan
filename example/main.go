@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"FlowChan/batch"
-	"FlowChan/iter"
-	"FlowChan/pipeline"
-	"FlowChan/pool"
-	"FlowChan/stream"
-	"FlowChan/termination"
-	"FlowChan/retry"
+	"github.com/Atul-Koundal/FlowChan/batch"
+	"github.com/Atul-Koundal/FlowChan/iter"
+	"github.com/Atul-Koundal/FlowChan/pipeline"
+	"github.com/Atul-Koundal/FlowChan/pool"
+	"github.com/Atul-Koundal/FlowChan/stream"
+	"github.com/Atul-Koundal/FlowChan/termination"
+	"github.com/Atul-Koundal/FlowChan/retry"
 )
 
 // --- pool tasks ---

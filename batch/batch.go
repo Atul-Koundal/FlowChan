@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 //A batch stage collects individual items and groups them together before passing downstream. Two triggers flush a batch:
 

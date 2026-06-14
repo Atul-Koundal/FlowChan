@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 // RealtimeBatcher uses a sliding window - the window resets

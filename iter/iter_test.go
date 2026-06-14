@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 func TestFromChan(t *testing.T) {

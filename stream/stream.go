@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "FlowChan/errors"
+	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
 // Map applies fn to every item concurrently, results may arrive out of order.
