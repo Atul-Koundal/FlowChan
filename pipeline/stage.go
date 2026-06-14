@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	
 
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
@@ -35,7 +34,8 @@ func WithRateLimit[In, Out any](itemsPerSecond int) StageOption[In, Out] {
 }
 
 // WithMetrics attaches a Metrics collector to the stage. Call Snapshot()
-// on it at any time to inspect throughput, failures, and active workers.
+// on it at any time, from any goroutine, to inspect throughput, failures,
+// and active workers while the stage is running.
 func WithMetrics[In, Out any](m *Metrics) StageOption[In, Out] {
 	return func(s *Stage[In, Out]) {
 		s.metrics = m
@@ -141,35 +141,6 @@ func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err erro
 	return s.fn(ctx, val)
 }
 
-// Metrics tracks runtime statistics for a stage. Safe for concurrent use.
-type Metrics struct {
-	processed atomicInt64
-	failed    atomicInt64
-	active    atomicInt32
-}
-
-// NewMetrics returns a fresh, zeroed Metrics collector.
-func NewMetrics() *Metrics {
-	return &Metrics{}
-}
-
-// MetricsSnapshot is a point-in-time read of a Metrics collector.
-type MetricsSnapshot struct {
-	Processed int64 // total items completed (success or failure)
-	Failed    int64 // total items that returned an error
-	Active    int32 // workers currently processing an item
-}
-
-// Snapshot returns the current values. Safe to call concurrently
-// while the stage is running.
-func (m *Metrics) Snapshot() MetricsSnapshot {
-	return MetricsSnapshot{
-		Processed: m.processed.Load(),
-		Failed:    m.failed.Load(),
-		Active:    m.active.Load(),
-	}
-}
-
 // Pipeline chains multiple stages so the output of one feeds the next.
 type Pipeline[In, Out any] struct {
 	run func(context.Context, <-chan In) <-chan ferrors.Result[Out]
@@ -191,8 +162,6 @@ func Chain[In, Mid, Out any](
 			midValues := make(chan Mid, first.workers)
 			errOut := make(chan ferrors.Result[Out], first.workers)
 
-			// split first stage's results: errors go to errOut,
-			// successes flow into the second stage
 			go func() {
 				defer close(midValues)
 				defer close(errOut)
@@ -215,7 +184,6 @@ func Chain[In, Mid, Out any](
 
 			secondOut := second.Run(ctx, midValues)
 
-			// merge errOut (stage 1 failures) and secondOut (stage 2 results)
 			finalOut := make(chan ferrors.Result[Out], second.workers)
 			var wg sync.WaitGroup
 			wg.Add(2)
