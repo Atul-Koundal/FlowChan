@@ -135,3 +135,104 @@ func TestOrderedStage_PreservesOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestChain_PropagatesStage1Errors(t *testing.T) {
+	stage1 := NewStage(2, func(ctx context.Context, n int) (int, error) {
+		if n == 3 {
+			return 0, fmt.Errorf("stage1 failed on %d", n)
+		}
+		return n * 2, nil
+	})
+
+	stage2 := NewStage(2, func(ctx context.Context, n int) (string, error) {
+		return fmt.Sprintf("val-%d", n), nil
+	})
+
+	p := Chain(stage1, stage2)
+	out := p.Run(context.Background(), toChan(1, 2, 3, 4, 5))
+
+	var errCount, valCount int
+	for r := range out {
+		if r.IsErr() {
+			errCount++
+		} else {
+			valCount++
+		}
+	}
+
+	if errCount != 1 {
+		t.Errorf("expected 1 error from stage1, got %d", errCount)
+	}
+	if valCount != 4 {
+		t.Errorf("expected 4 values, got %d", valCount)
+	}
+}
+
+func TestStage_RecoversFromPanic(t *testing.T) {
+	stage := NewStage(2, func(ctx context.Context, n int) (int, error) {
+		if n == 3 {
+			panic("boom")
+		}
+		return n * 2, nil
+	})
+
+	out := stage.Run(context.Background(), toChan(1, 2, 3, 4, 5))
+
+	var errCount, valCount int
+	for r := range out {
+		if r.IsErr() {
+			errCount++
+		} else {
+			valCount++
+		}
+	}
+
+	if errCount != 1 {
+		t.Errorf("expected 1 panic-converted error, got %d", errCount)
+	}
+	if valCount != 4 {
+		t.Errorf("expected 4 successful values, got %d", valCount)
+	}
+}
+
+func TestStage_RateLimit(t *testing.T) {
+	stage := NewStage[int, int](5, func(ctx context.Context, n int) (int, error) {
+		return n, nil
+	}, WithRateLimit[int, int](10)) // 10 items/sec
+
+	start := time.Now()
+	out := stage.Run(context.Background(), toChan(1, 2, 3, 4, 5))
+	for range out {
+	}
+	elapsed := time.Since(start)
+
+	// 5 items at 10/sec should take roughly 400-500ms
+	if elapsed < 300*time.Millisecond {
+		t.Errorf("rate limit not enforced, took only %v", elapsed)
+	}
+}
+
+func TestStage_Metrics(t *testing.T) {
+	m := NewMetrics()
+	stage := NewStage[int, int](3, func(ctx context.Context, n int) (int, error) {
+		if n == 3 {
+			return 0, fmt.Errorf("fail")
+		}
+		return n, nil
+	}, WithMetrics[int, int](m))
+
+	out := stage.Run(context.Background(), toChan(1, 2, 3, 4, 5))
+	for range out {
+	}
+
+	snap := m.Snapshot()
+	if snap.Processed != 5 {
+		t.Errorf("expected 5 processed, got %d", snap.Processed)
+	}
+	if snap.Failed != 1 {
+		t.Errorf("expected 1 failed, got %d", snap.Failed)
+	}
+	if snap.Active != 0 {
+		t.Errorf("expected 0 active after completion, got %d", snap.Active)
+	}
+}
