@@ -1,93 +1,259 @@
+// Package pipeline provides composable, concurrent processing stages.
+// A Stage transforms a stream of inputs into a stream of Results,
+// and Chain connects stages so the output of one feeds the next.
 package pipeline
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
+	
 
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
-// Stage represents a single unit of work in the pipeline.
-// It takes an input channel and returns an output channel.
+// Stage represents a single concurrent transformation step.
+// It reads from an input channel, applies fn using the configured
+// number of workers, and writes results to an output channel.
 type Stage[In, Out any] struct {
-	workers int
-	fn      func(context.Context, In) (Out, error)
+	workers   int
+	fn        func(context.Context, In) (Out, error)
+	rateLimit int // items per second, 0 means unlimited
+	metrics   *Metrics
 }
 
-// NewStage creates a new stage with the given worker count and transform function.
-func NewStage[In, Out any](workers int, fn func(context.Context, In) (Out, error)) *Stage[In, Out] {
-	return &Stage[In, Out]{
-		workers: workers,
-		fn:      fn,
+// StageOption configures optional behaviour on a Stage.
+type StageOption[In, Out any] func(*Stage[In, Out])
+
+// WithRateLimit caps the stage to itemsPerSecond across all workers
+// combined. Use this to avoid overwhelming downstream APIs or databases.
+func WithRateLimit[In, Out any](itemsPerSecond int) StageOption[In, Out] {
+	return func(s *Stage[In, Out]) {
+		s.rateLimit = itemsPerSecond
 	}
 }
 
-// Run starts the stage — reads from in, processes concurrently, writes to output channel.
+// WithMetrics attaches a Metrics collector to the stage. Call Snapshot()
+// on it at any time to inspect throughput, failures, and active workers.
+func WithMetrics[In, Out any](m *Metrics) StageOption[In, Out] {
+	return func(s *Stage[In, Out]) {
+		s.metrics = m
+	}
+}
+
+// NewStage creates a stage that runs fn across the given number of
+// concurrent workers.
+func NewStage[In, Out any](workers int, fn func(context.Context, In) (Out, error), opts ...StageOption[In, Out]) *Stage[In, Out] {
+	s := &Stage[In, Out]{workers: workers, fn: fn}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// Run starts the stage. It returns immediately with an output channel
+// that closes once all input has been processed or the context is done.
+// Panics inside fn are recovered and converted into Result errors.
 func (s *Stage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
 	out := make(chan ferrors.Result[Out], s.workers)
+
+	var limiter *time.Ticker
+	var limiterC <-chan time.Time
+	if s.rateLimit > 0 {
+		limiter = time.NewTicker(time.Second / time.Duration(s.rateLimit))
+		limiterC = limiter.C
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < s.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case val, ok := <-in:
-					if !ok {
-						return
-					}
-					result, err := s.fn(ctx, val)
-					out <- ferrors.Result[Out]{Value: result, Err: err}
-				case <-ctx.Done():
-					return
-				}
-			}
+			s.runWorker(ctx, in, out, limiterC)
 		}()
 	}
 
 	go func() {
 		wg.Wait()
+		if limiter != nil {
+			limiter.Stop()
+		}
 		close(out)
 	}()
 
 	return out
 }
 
-// Pipeline chains multiple stages together.
+// runWorker is the per-goroutine loop. Separated from Run so that
+// recover() cleanly catches a panic from a single item without
+// taking down the whole stage.
+func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<- ferrors.Result[Out], limiterC <-chan time.Time) {
+	for {
+		select {
+		case val, ok := <-in:
+			if !ok {
+				return
+			}
+
+			if limiterC != nil {
+				select {
+				case <-limiterC:
+				case <-ctx.Done():
+					return
+				}
+			}
+
+			if s.metrics != nil {
+				s.metrics.active.Add(1)
+			}
+
+			result, err := s.process(ctx, val)
+
+			if s.metrics != nil {
+				s.metrics.active.Add(-1)
+				s.metrics.processed.Add(1)
+				if err != nil {
+					s.metrics.failed.Add(1)
+				}
+			}
+
+			select {
+			case out <- ferrors.Result[Out]{Value: result, Err: err}:
+			case <-ctx.Done():
+				return
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// process calls fn and recovers from any panic, converting it into
+// an error so a single bad item cannot crash the whole pipeline.
+func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in stage: %v", r)
+		}
+	}()
+	return s.fn(ctx, val)
+}
+
+// Metrics tracks runtime statistics for a stage. Safe for concurrent use.
+type Metrics struct {
+	processed atomicInt64
+	failed    atomicInt64
+	active    atomicInt32
+}
+
+// NewMetrics returns a fresh, zeroed Metrics collector.
+func NewMetrics() *Metrics {
+	return &Metrics{}
+}
+
+// MetricsSnapshot is a point-in-time read of a Metrics collector.
+type MetricsSnapshot struct {
+	Processed int64 // total items completed (success or failure)
+	Failed    int64 // total items that returned an error
+	Active    int32 // workers currently processing an item
+}
+
+// Snapshot returns the current values. Safe to call concurrently
+// while the stage is running.
+func (m *Metrics) Snapshot() MetricsSnapshot {
+	return MetricsSnapshot{
+		Processed: m.processed.Load(),
+		Failed:    m.failed.Load(),
+		Active:    m.active.Load(),
+	}
+}
+
+// Pipeline chains multiple stages so the output of one feeds the next.
 type Pipeline[In, Out any] struct {
 	run func(context.Context, <-chan In) <-chan ferrors.Result[Out]
 }
 
-// Chain connects two stages — output of first becomes input of second.
+// Chain connects two stages into a single pipeline. Errors produced
+// by the first stage are NOT dropped - they are forwarded directly
+// to the final output as Result[Out]{Err: ...}, alongside results
+// from the second stage. Only successful values from the first stage
+// are passed into the second.
 func Chain[In, Mid, Out any](
 	first *Stage[In, Mid],
 	second *Stage[Mid, Out],
 ) *Pipeline[In, Out] {
 	return &Pipeline[In, Out]{
 		run: func(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
-			// run first stage
 			midResults := first.Run(ctx, in)
 
-			// unwrap successful results into a plain channel for second stage
 			midValues := make(chan Mid, first.workers)
+			errOut := make(chan ferrors.Result[Out], first.workers)
+
+			// split first stage's results: errors go to errOut,
+			// successes flow into the second stage
 			go func() {
 				defer close(midValues)
+				defer close(errOut)
 				for r := range midResults {
 					if r.Err != nil {
-						continue // errors are dropped here — we will improve this later
+						select {
+						case errOut <- ferrors.Result[Out]{Err: r.Err}:
+						case <-ctx.Done():
+							return
+						}
+						continue
 					}
-					midValues <- r.Value
+					select {
+					case midValues <- r.Value:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}()
 
-			// run second stage on unwrapped values
-			return second.Run(ctx, midValues)
+			secondOut := second.Run(ctx, midValues)
+
+			// merge errOut (stage 1 failures) and secondOut (stage 2 results)
+			finalOut := make(chan ferrors.Result[Out], second.workers)
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				for r := range errOut {
+					select {
+					case finalOut <- r:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			go func() {
+				defer wg.Done()
+				for r := range secondOut {
+					select {
+					case finalOut <- r:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+
+			go func() {
+				wg.Wait()
+				close(finalOut)
+			}()
+
+			return finalOut
 		},
 	}
 }
 
-// Run executes the full pipeline.
+// Run executes the pipeline against in and returns the combined
+// output stream from all stages.
 func (p *Pipeline[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
 	return p.run(ctx, in)
 }
