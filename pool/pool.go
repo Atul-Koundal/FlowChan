@@ -3,7 +3,14 @@ package pool
 import (
 	"context"
 	"sync"
+
+	"go.uber.org/goleak"
+
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 type Task interface {
 	Process() error
