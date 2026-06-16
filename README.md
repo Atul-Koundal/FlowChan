@@ -372,7 +372,9 @@ flowchan/
 ├── errors/             # Result[T] - value + error carrier
 ├── pipeline/
 │   ├── stage.go        # Stage[In,Out], Chain
-│   └── ordered.go      # OrderedStage - strict output ordering
+│   └── ordered.go      # OrderedStage strict output ordering
+|   |__ metrics.go      # Throughput,latency,counters
+|   |__ atomic.go       # Atomic counters, flags, state
 ├── batch/
 │   ├── batch.go        # fixed size + timeout batching
 │   └── realtime.go     # sliding window realtime batching
