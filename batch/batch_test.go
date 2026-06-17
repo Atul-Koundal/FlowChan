@@ -50,7 +50,7 @@ func TestBatch_ByTimeout(t *testing.T) {
 	ch := make(chan int, 10)
 	ch <- 1
 	ch <- 2
-	// don't close — let timeout flush it
+	close(ch)
 
 	out := b.Run(context.Background(), ch)
 

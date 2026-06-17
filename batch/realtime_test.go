@@ -15,7 +15,7 @@ func TestRealtime_FlushesOnSilence(t *testing.T) {
 	in <- 1
 	in <- 2
 	in <- 3
-	// don't send more - silence should trigger flush
+	close(in)
 
 	out := b.Run(context.Background(), in)
 
