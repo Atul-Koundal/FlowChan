@@ -7,7 +7,14 @@ import (
     "testing"
     "time"
     "fmt"
+
+    "go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
+
 
 // --- test task types ---
 
