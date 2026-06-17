@@ -7,7 +7,13 @@ import (
 	"testing"
 	"time"
 	"sync/atomic"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func toChan[T any](items ...T) <-chan T {
 	ch := make(chan T, len(items))

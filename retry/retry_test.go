@@ -6,7 +6,13 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestFixed_AlwaysSameWait(t *testing.T) {
 	strategy := Fixed(100 * time.Millisecond)

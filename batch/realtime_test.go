@@ -4,7 +4,13 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestRealtime_FlushesOnSilence(t *testing.T) {
 	b := NewRealtime[int](100, 100*time.Millisecond)

@@ -4,7 +4,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestTerminator_DrainBeforeExit(t *testing.T) {
 	term := New()

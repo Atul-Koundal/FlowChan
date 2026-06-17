@@ -5,7 +5,13 @@ import (
 	"testing"
 
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestFromChan(t *testing.T) {
 	ch := make(chan int, 5)

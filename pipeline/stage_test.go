@@ -7,7 +7,13 @@ import (
 	"time"
 
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // helper - sends items into a channel and closes it
 func toChan[T any](items ...T) <-chan T {
