@@ -24,11 +24,21 @@ type WorkPool struct {
 	concurrency int
 	maxRetries  int
 	tasksChan   chan Task
+	rateLimit   int
 	errors      chan error
 }
 
 // Option configures a WorkPool. Pass Options to NewWorkPool.
 type Option func(*WorkPool)
+
+// WithRateLimit caps the pool to itemsPerSecond tasks across all
+// workers combined. Use this when tasks call external services
+// that enforce rate limits.
+func WithRateLimit(itemsPerSecond int) Option {
+	return func(wp *WorkPool) {
+		wp.rateLimit = itemsPerSecond
+	}
+}
 
 // WithRetries sets how many additional attempts a failing task gets
 // before its error is recorded. A value of 3 means the task runs
@@ -112,7 +122,23 @@ func (wp *WorkPool) Run(ctx context.Context) []error {
 
 	go func() {
 		defer close(wp.tasksChan)
+
+		var limiter *time.Ticker
+		var limiterC <-chan time.Time
+		if wp.rateLimit > 0 {
+			limiter = time.NewTicker(time.Second / time.Duration(wp.rateLimit))
+			defer limiter.Stop()
+			limiterC = limiter.C
+		}
+
 		for _, task := range wp.tasks {
+			if limiterC != nil {
+				select {
+				case <-limiterC:
+				case <-ctx.Done():
+					return
+				}
+			}
 			select {
 			case wp.tasksChan <- task:
 			case <-ctx.Done():
