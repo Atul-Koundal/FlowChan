@@ -26,11 +26,20 @@ type WorkPool struct {
 	maxRetries  int
 	tasksChan   chan Task
 	rateLimit   int
+	metrics     *Metrics
 	errors      chan error
 }
 
 // Option configures a WorkPool. Pass Options to NewWorkPool.
 type Option func(*WorkPool)
+
+// WithMetrics attaches a Metrics collector to the pool. Call Snapshot()
+// at any time to inspect throughput, failures, and active workers.
+func WithMetrics(m *Metrics) Option {
+	return func(wp *WorkPool) {
+		wp.metrics = m
+	}
+}
 
 // WithRateLimit caps the pool to itemsPerSecond tasks across all
 // workers combined. Use this when tasks call external services
@@ -100,7 +109,18 @@ func (wp *WorkPool) worker(ctx context.Context, wg *sync.WaitGroup) {
 			if !ok {
 				return
 			}
-			if err := wp.runWithRetry(task); err != nil {
+			if wp.metrics != nil {
+				wp.metrics.active.Add(1)
+			}
+			err := wp.runWithRetry(task)
+			if wp.metrics != nil {
+				wp.metrics.active.Add(-1)
+				wp.metrics.processed.Add(1)
+				if err != nil {
+					wp.metrics.failed.Add(1)
+				}
+			}
+			if err != nil {
 				wp.errors <- err
 			}
 		case <-ctx.Done():
