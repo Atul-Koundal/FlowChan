@@ -227,3 +227,68 @@ func TestStream_EmitsErrorAfterExhaustion(t *testing.T) {
 		t.Errorf("expected 2 errors, got %d", errCount)
 	}
 }
+
+func TestStreamWithDLQ_RoutesFailuresToDLQ(t *testing.T) {
+	in := make(chan int, 4)
+	in <- 1
+	in <- 2
+	in <- 3
+	in <- 4
+	close(in)
+
+	// items 2 and 4 always fail
+	out, dlq := StreamWithDLQ(context.Background(), in, 2,
+		Fixed(time.Millisecond),
+		func(ctx context.Context, n int) (int, error) {
+			if n%2 == 0 {
+				return 0, fmt.Errorf("even numbers fail")
+			}
+			return n * 2, nil
+		})
+
+	var results []int
+	var failed []int
+
+	for r := range out {
+		results = append(results, r.Value)
+	}
+	for f := range dlq {
+		failed = append(failed, f.Item)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("expected 2 successful results, got %d", len(results))
+	}
+	if len(failed) != 2 {
+		t.Errorf("expected 2 dead letter items, got %d", len(failed))
+	}
+}
+
+func TestStreamWithDLQ_AllSucceed(t *testing.T) {
+	in := make(chan int, 3)
+	in <- 1
+	in <- 2
+	in <- 3
+	close(in)
+
+	out, dlq := StreamWithDLQ(context.Background(), in, 2,
+		Fixed(time.Millisecond),
+		func(ctx context.Context, n int) (int, error) {
+			return n * 2, nil
+		})
+
+	var results, failed int
+	for range out {
+		results++
+	}
+	for range dlq {
+		failed++
+	}
+
+	if results != 3 {
+		t.Errorf("expected 3 results, got %d", results)
+	}
+	if failed != 0 {
+		t.Errorf("expected 0 dead letter items, got %d", failed)
+	}
+}
