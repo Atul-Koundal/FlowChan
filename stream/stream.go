@@ -10,6 +10,21 @@ import (
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
+// MapOption configures optional behaviour on Map and OrderedMap.
+type MapOption func(*mapConfig)
+
+type mapConfig struct {
+	metrics *Metrics
+}
+
+// WithMetrics attaches a Metrics collector to a Map or OrderedMap call.
+func WithMetrics(m *Metrics) MapOption {
+	return func(c *mapConfig) {
+		c.metrics = m
+	}
+}
+
+
 // Map applies fn to each item concurrently. Results may arrive in
 // any order. Use OrderedMap when output order must match input order.
 func Map[In, Out any](
@@ -17,10 +32,16 @@ func Map[In, Out any](
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) (Out, error),
+	opts ...MapOption,
 ) <-chan ferrors.Result[Out] {
-	out := make(chan ferrors.Result[Out], workers)
+	cfg := &mapConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
 
+	out := make(chan ferrors.Result[Out], workers)
 	var wg sync.WaitGroup
+
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -31,7 +52,17 @@ func Map[In, Out any](
 					if !ok {
 						return
 					}
+					if cfg.metrics != nil {
+						cfg.metrics.active.Add(1)
+					}
 					val, err := fn(ctx, item)
+					if cfg.metrics != nil {
+						cfg.metrics.active.Add(-1)
+						cfg.metrics.processed.Add(1)
+						if err != nil {
+							cfg.metrics.failed.Add(1)
+						}
+					}
 					out <- ferrors.Result[Out]{Value: val, Err: err}
 				case <-ctx.Done():
 					return
