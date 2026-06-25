@@ -185,3 +185,26 @@ type funcTask struct {
 func (t *funcTask) Process() error {
 	return t.fn()
 }
+
+func TestPool_RateLimit(t *testing.T) {
+	tasks := makeTasks(5)
+	wp := NewWorkPool(tasks, 5, WithRateLimit(10)) // 10 tasks/sec
+
+	start := time.Now()
+	wp.Run(context.Background())
+	elapsed := time.Since(start)
+
+	// 5 tasks at 10/sec should take at least 400ms
+	if elapsed < 300*time.Millisecond {
+		t.Errorf("rate limit not enforced, took only %v", elapsed)
+	}
+}
+
+// helper for tests
+func makeTasks(n int) []Task {
+	tasks := make([]Task, n)
+	for i := range tasks {
+		tasks[i] = &funcTask{fn: func() error { return nil }}
+	}
+	return tasks
+}
