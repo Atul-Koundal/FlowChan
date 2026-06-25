@@ -200,11 +200,33 @@ func TestPool_RateLimit(t *testing.T) {
 	}
 }
 
-// helper for tests
+
 func makeTasks(n int) []Task {
 	tasks := make([]Task, n)
 	for i := range tasks {
 		tasks[i] = &funcTask{fn: func() error { return nil }}
 	}
 	return tasks
+}
+func TestPool_Metrics(t *testing.T) {
+	m := NewMetrics()
+	tasks := []Task{
+		&funcTask{fn: func() error { return nil }},
+		&funcTask{fn: func() error { return nil }},
+		&funcTask{fn: func() error { return fmt.Errorf("fail") }},
+	}
+
+	wp := NewWorkPool(tasks, 2, WithMetrics(m))
+	wp.Run(context.Background())
+
+	snap := m.Snapshot()
+	if snap.Processed != 3 {
+		t.Errorf("expected 3 processed, got %d", snap.Processed)
+	}
+	if snap.Failed != 1 {
+		t.Errorf("expected 1 failed, got %d", snap.Failed)
+	}
+	if snap.Active != 0 {
+		t.Errorf("expected 0 active after completion, got %d", snap.Active)
+	}
 }
