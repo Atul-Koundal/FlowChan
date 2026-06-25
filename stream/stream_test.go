@@ -223,3 +223,28 @@ func TestBackpressureMap_Cancellation(t *testing.T) {
 	for range out {
 	}
 }
+
+func TestMap_Metrics(t *testing.T) {
+	m := NewMetrics()
+	out := Map(context.Background(), toChan(1, 2, 3, 4, 5), 3,
+		func(ctx context.Context, n int) (int, error) {
+			if n == 3 {
+				return 0, fmt.Errorf("fail")
+			}
+			return n * 2, nil
+		}, WithMetrics(m))
+
+	for range out {
+	}
+
+	snap := m.Snapshot()
+	if snap.Processed != 5 {
+		t.Errorf("expected 5 processed, got %d", snap.Processed)
+	}
+	if snap.Failed != 1 {
+		t.Errorf("expected 1 failed, got %d", snap.Failed)
+	}
+	if snap.Active != 0 {
+		t.Errorf("expected 0 active, got %d", snap.Active)
+	}
+}
