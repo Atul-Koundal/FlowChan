@@ -389,6 +389,10 @@ flowchan/
 
 Packages only depend downward. Nothing in `pool` imports `pipeline`. `errors` imports nothing from FlowChan. Any package can be used independently without pulling in the rest of the library.
 
+## Acknowledgements
+
+Thanks to [Rill](https://github.com/destel/rill) for being an amazing read and a source of inspiration for some of the concurrency patterns used in this project.
+
 ---
 
 ## License
