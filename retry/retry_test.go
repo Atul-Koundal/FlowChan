@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 	"time"
+	"sync"
 
 	"go.uber.org/goleak"
 )
@@ -236,7 +237,6 @@ func TestStreamWithDLQ_RoutesFailuresToDLQ(t *testing.T) {
 	in <- 4
 	close(in)
 
-	// items 2 and 4 always fail
 	out, dlq := StreamWithDLQ(context.Background(), in, 2,
 		Fixed(time.Millisecond),
 		func(ctx context.Context, n int) (int, error) {
@@ -249,12 +249,26 @@ func TestStreamWithDLQ_RoutesFailuresToDLQ(t *testing.T) {
 	var results []int
 	var failed []int
 
-	for r := range out {
-		results = append(results, r.Value)
-	}
-	for f := range dlq {
-		failed = append(failed, f.Item)
-	}
+	// drain both concurrently - they must be consumed in parallel
+	// because the producer writes to both channels
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for r := range out {
+			results = append(results, r.Value)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for f := range dlq {
+			failed = append(failed, f.Item)
+		}
+	}()
+
+	wg.Wait()
 
 	if len(results) != 2 {
 		t.Errorf("expected 2 successful results, got %d", len(results))
@@ -278,12 +292,24 @@ func TestStreamWithDLQ_AllSucceed(t *testing.T) {
 		})
 
 	var results, failed int
-	for range out {
-		results++
-	}
-	for range dlq {
-		failed++
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for range out {
+			results++
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for range dlq {
+			failed++
+		}
+	}()
+
+	wg.Wait()
 
 	if results != 3 {
 		t.Errorf("expected 3 results, got %d", results)
