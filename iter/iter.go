@@ -1,3 +1,5 @@
+// Package iter provides push iterators for consuming FlowChan streams
+// without writing raw channel loops.
 package iter
 
 import (
@@ -6,14 +8,14 @@ import (
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
-// Seq is a push iterator — calls yield for each item until yield returns false.
+// Seq is a push iterator that calls yield for each item. Returning
+// false from yield stops iteration immediately.
 type Seq[T any] func(yield func(T) bool)
 
-// SeqErr is a push iterator that also carries errors.
+// SeqErr is a push iterator that carries both a value and an error.
 type SeqErr[T any] func(yield func(T, error) bool)
 
-// FromChan converts a channel into an iterator.
-// Stops when channel closes or context cancels.
+// FromChan converts a channel into a Seq iterator.
 func FromChan[T any](ctx context.Context, ch <-chan T) Seq[T] {
 	return func(yield func(T) bool) {
 		for {
@@ -51,7 +53,7 @@ func FromResults[T any](ctx context.Context, ch <-chan ferrors.Result[T]) SeqErr
 	}
 }
 
-// ToChan converts an iterator back into a channel.
+// ToChan converts a Seq iterator back into a channel.
 func ToChan[T any](ctx context.Context, seq Seq[T]) <-chan T {
 	out := make(chan T)
 	go func() {
@@ -68,7 +70,7 @@ func ToChan[T any](ctx context.Context, seq Seq[T]) <-chan T {
 	return out
 }
 
-// Map transforms each item in an iterator.
+// Map transforms each item in seq using fn.
 func Map[In, Out any](seq Seq[In], fn func(In) Out) Seq[Out] {
 	return func(yield func(Out) bool) {
 		seq(func(item In) bool {
@@ -77,7 +79,7 @@ func Map[In, Out any](seq Seq[In], fn func(In) Out) Seq[Out] {
 	}
 }
 
-// Filter keeps only items where fn returns true.
+// Filter returns a Seq containing only items where fn returns true.
 func Filter[T any](seq Seq[T], fn func(T) bool) Seq[T] {
 	return func(yield func(T) bool) {
 		seq(func(item T) bool {
@@ -89,7 +91,7 @@ func Filter[T any](seq Seq[T], fn func(T) bool) Seq[T] {
 	}
 }
 
-// Collect drains an iterator into a slice.
+// Collect drains seq into a slice and returns it.
 func Collect[T any](seq Seq[T]) []T {
 	var items []T
 	seq(func(item T) bool {

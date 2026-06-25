@@ -1,3 +1,6 @@
+// Package stream provides concurrent stream transformation functions.
+// All functions return a channel that closes when input is exhausted
+// or the context is cancelled.
 package stream
 
 import (
@@ -7,7 +10,8 @@ import (
 	ferrors "github.com/Atul-Koundal/FlowChan/errors"
 )
 
-// Map applies fn to every item concurrently, results may arrive out of order.
+// Map applies fn to each item concurrently. Results may arrive in
+// any order. Use OrderedMap when output order must match input order.
 func Map[In, Out any](
 	ctx context.Context,
 	in <-chan In,
@@ -43,8 +47,8 @@ func Map[In, Out any](
 
 	return out
 }
-
-// OrderedMap applies fn concurrently but preserves input order in output.
+// OrderedMap applies fn concurrently but guarantees output order
+// matches input order. Slower than Map due to the reordering buffer.
 func OrderedMap[In, Out any](
 	ctx context.Context,
 	in <-chan In,
@@ -138,7 +142,7 @@ func OrderedMap[In, Out any](
 	return out
 }
 
-// FlatMap applies fn to each item, fn returns a slice — all items
+// FlatMap applies fn to each item where fn returns a slice. All items
 // from all slices are emitted individually downstream.
 func FlatMap[In, Out any](
 	ctx context.Context,

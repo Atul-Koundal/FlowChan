@@ -1,3 +1,5 @@
+// Package retry provides backoff strategies and retry helpers.
+// Use Do for single operations, Stream to add retry to a pipeline stage.
 package retry
 
 import (
@@ -16,16 +18,18 @@ import (
 
 // BackoffStrategy takes the attempt number (starting at 0)
 // and returns how long to wait before the next attempt.
+
+// BackoffStrategy takes the attempt number and returns how long to wait.
 type BackoffStrategy func(attempt int) time.Duration
 
-// Fixed waits the same duration between every attempt.
+// Fixed returns a strategy that always waits the same duration.
 func Fixed(wait time.Duration) BackoffStrategy {
 	return func(attempt int) time.Duration {
 		return wait
 	}
 }
 
-// Exponential doubles the wait time on every attempt,
+// Exponential returns a strategy that doubles the wait on each attempt,
 // capped at max.
 func Exponential(base, max time.Duration) BackoffStrategy {
 	return func(attempt int) time.Duration {
@@ -41,6 +45,9 @@ func Exponential(base, max time.Duration) BackoffStrategy {
 // and adds random jitter to prevent thundering herd.
 // All workers retrying at the same instant hammers a
 // recovering system - jitter spreads them out.
+
+// ExponentialJitter returns an exponential strategy with random jitter.
+// Recommended for production - prevents thundering herd.
 func ExponentialJitter(base, max time.Duration) BackoffStrategy {
 	return func(attempt int) time.Duration {
 		exp := base * time.Duration(math.Pow(2, float64(attempt)))
@@ -57,7 +64,8 @@ func ExponentialJitter(base, max time.Duration) BackoffStrategy {
 	}
 }
 
-// RetryError wraps the last error with attempt count context.
+// RetryError is returned when all attempts are exhausted. It wraps
+// the last error and records how many attempts were made.
 type RetryError struct {
 	Attempts int
 	Last     error
@@ -71,9 +79,8 @@ func (e *RetryError) Unwrap() error {
 	return e.Last
 }
 
-// Do runs fn up to maxAttempts times, waiting between attempts
-// using the provided strategy. Returns nil on first success.
-// Respects context cancellation during wait periods.
+// Do calls fn up to maxAttempts times with backoff between attempts.
+// Returns nil on first success. Respects context cancellation.
 func Do(ctx context.Context, maxAttempts int, strategy BackoffStrategy, fn func() error) error {
 	var lastErr error
 
@@ -100,8 +107,7 @@ func Do(ctx context.Context, maxAttempts int, strategy BackoffStrategy, fn func(
 	return &RetryError{Attempts: maxAttempts, Last: lastErr}
 }
 
-// DoWithResult runs fn up to maxAttempts times and returns
-// the value on success. Same backoff behaviour as Do.
+// DoWithResult is like Do but fn returns a value alongside the error.
 func DoWithResult[T any](ctx context.Context, maxAttempts int, strategy BackoffStrategy, fn func() (T, error)) (T, error) {
 	var lastErr error
 	var zero T
@@ -128,9 +134,8 @@ func DoWithResult[T any](ctx context.Context, maxAttempts int, strategy BackoffS
 	return zero, &RetryError{Attempts: maxAttempts, Last: lastErr}
 }
 
-// Stream applies fn to each item from in, retrying failed
-// items with backoff before emitting an error downstream.
-// Successful results and errors both flow through Result[T].
+// Stream applies fn to each item from in, retrying failed items with
+// backoff before emitting an error downstream.
 func Stream[In, Out any](
 	ctx context.Context,
 	in <-chan In,
