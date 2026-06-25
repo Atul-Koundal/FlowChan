@@ -19,11 +19,21 @@ type Stage[In, Out any] struct {
 	workers   int
 	fn        func(context.Context, In) (Out, error)
 	rateLimit int // items per second, 0 means unlimited
+	itemTimeout time.Duration
 	metrics   *Metrics
 }
 
 // StageOption configures optional behaviour on a Stage.
 type StageOption[In, Out any] func(*Stage[In, Out])
+
+// WithItemTimeout sets a maximum duration for processing a single item.
+// If fn takes longer than the timeout, that item fails with a timeout
+// error and the next item is processed normally.
+func WithItemTimeout[In, Out any](d time.Duration) StageOption[In, Out] {
+	return func(s *Stage[In, Out]) {
+		s.itemTimeout = d
+	}
+}
 
 // WithRateLimit caps the stage to itemsPerSecond across all workers
 // combined. Use this to avoid overwhelming downstream APIs or databases.
@@ -130,14 +140,22 @@ func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<-
 	}
 }
 
-// process calls fn and recovers from any panic, converting it into
-// an error so a single bad item cannot crash the whole pipeline.
+// process calls fn with an optional per-item timeout and recovers
+// any panic, converting it into an error.
 func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err error) {
+	// wrap context with item timeout if configured
+	if s.itemTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.itemTimeout)
+		defer cancel()
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in stage: %v", r)
 		}
 	}()
+
 	return s.fn(ctx, val)
 }
 

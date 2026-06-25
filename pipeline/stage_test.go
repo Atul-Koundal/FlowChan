@@ -239,3 +239,36 @@ func TestOrderedStage_PreservesOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestStage_ItemTimeout(t *testing.T) {
+	stage := NewStage[int, int](3, func(ctx context.Context, n int) (int, error) {
+		if n == 3 {
+			// simulate slow item
+			select {
+			case <-time.After(500 * time.Millisecond):
+				return n, nil
+			case <-ctx.Done():
+				return 0, ctx.Err() // timeout hits here
+			}
+		}
+		return n * 2, nil
+	}, WithItemTimeout[int, int](100*time.Millisecond))
+
+	out := stage.Run(context.Background(), toChan(1, 2, 3, 4, 5))
+
+	var errCount, valCount int
+	for r := range out {
+		if r.IsErr() {
+			errCount++
+		} else {
+			valCount++
+		}
+	}
+
+	if errCount != 1 {
+		t.Errorf("expected 1 timeout error, got %d", errCount)
+	}
+	if valCount != 4 {
+		t.Errorf("expected 4 successful values, got %d", valCount)
+	}
+}
