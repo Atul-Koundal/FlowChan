@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // RealtimeBatcher uses a sliding window - the window resets
@@ -22,8 +22,8 @@ func NewRealtime[T any](size int, window time.Duration) *RealtimeBatcher[T] {
 	}
 }
 
-func (b *RealtimeBatcher[T]) Run(ctx context.Context, in <-chan T) <-chan ferrors.Result[[]T] {
-	out := make(chan ferrors.Result[[]T], 1)
+func (b *RealtimeBatcher[T]) Run(ctx context.Context, in <-chan T) <-chan fresult.Result[[]T] {
+	out := make(chan fresult.Result[[]T], 1)
 
 	go func() {
 		defer close(out)
@@ -40,7 +40,7 @@ func (b *RealtimeBatcher[T]) Run(ctx context.Context, in <-chan T) <-chan ferror
 			}
 			toSend := make([]T, len(batch))
 			copy(toSend, batch)
-			out <- ferrors.Result[[]T]{Value: toSend}
+			out <- fresult.Result[[]T]{Value: toSend}
 			batch = batch[:0]
 
 			// stop and nil the timer after flush

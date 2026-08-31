@@ -4,20 +4,20 @@ import (
 	"context"
 	"sync"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // Builder constructs a multi-stage pipeline by chaining stages
 // one at a time. Errors from any stage flow to the final output
 // without being dropped at intermediate steps.
 type Builder[In, Out any] struct {
-	run func(context.Context, <-chan In) <-chan ferrors.Result[Out]
+	run func(context.Context, <-chan In) <-chan fresult.Result[Out]
 }
 
 // NewBuilder starts a pipeline builder with a single initial stage.
 func NewBuilder[In, Out any](stage *Stage[In, Out]) *Builder[In, Out] {
 	return &Builder[In, Out]{
-		run: func(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+		run: func(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 			return stage.Run(ctx, in)
 		},
 	}
@@ -28,12 +28,12 @@ func NewBuilder[In, Out any](stage *Stage[In, Out]) *Builder[In, Out] {
 // are forwarded to the final output unchanged.
 func Pipe[In, Mid, Out any](b *Builder[In, Mid], next *Stage[Mid, Out]) *Builder[In, Out] {
 	return &Builder[In, Out]{
-		run: func(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+		run: func(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 			midResults := b.run(ctx, in)
 
 			// split: errors bypass next stage, values flow into it
 			midValues := make(chan Mid, next.workers)
-			errPassthrough := make(chan ferrors.Result[Out], next.workers)
+			errPassthrough := make(chan fresult.Result[Out], next.workers)
 
 			go func() {
 				defer close(midValues)
@@ -41,7 +41,7 @@ func Pipe[In, Mid, Out any](b *Builder[In, Mid], next *Stage[Mid, Out]) *Builder
 				for r := range midResults {
 					if r.Err != nil {
 						select {
-						case errPassthrough <- ferrors.Result[Out]{Err: r.Err}:
+						case errPassthrough <- fresult.Result[Out]{Err: r.Err}:
 						case <-ctx.Done():
 							return
 						}
@@ -64,17 +64,17 @@ func Pipe[In, Mid, Out any](b *Builder[In, Mid], next *Stage[Mid, Out]) *Builder
 }
 
 // Run executes the built pipeline against in and returns the output stream.
-func (b *Builder[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+func (b *Builder[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 	return b.run(ctx, in)
 }
 
 // merge fans two result channels into one, closing when both are done.
-func merge[T any](ctx context.Context, a, b <-chan ferrors.Result[T], bufSize int) <-chan ferrors.Result[T] {
-	out := make(chan ferrors.Result[T], bufSize)
+func merge[T any](ctx context.Context, a, b <-chan fresult.Result[T], bufSize int) <-chan fresult.Result[T] {
+	out := make(chan fresult.Result[T], bufSize)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	forward := func(ch <-chan ferrors.Result[T]) {
+	forward := func(ch <-chan fresult.Result[T]) {
 		defer wg.Done()
 		for r := range ch {
 			select {

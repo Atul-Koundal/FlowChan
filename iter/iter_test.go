@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 
 	"go.uber.org/goleak"
 )
@@ -29,10 +29,10 @@ func TestFromChan(t *testing.T) {
 }
 
 func TestFromResults(t *testing.T) {
-	ch := make(chan ferrors.Result[int], 3)
-	ch <- ferrors.Result[int]{Value: 1}
-	ch <- ferrors.Result[int]{Value: 2}
-	ch <- ferrors.Result[int]{Value: 3}
+	ch := make(chan fresult.Result[int], 3)
+	ch <- fresult.Result[int]{Value: 1}
+	ch <- fresult.Result[int]{Value: 2}
+	ch <- fresult.Result[int]{Value: 3}
 	close(ch)
 
 	seq := FromResults(context.Background(), ch)

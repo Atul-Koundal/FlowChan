@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // MapOption configures optional behaviour on Map and OrderedMap.
@@ -33,13 +33,13 @@ func Map[In, Out any](
 	workers int,
 	fn func(context.Context, In) (Out, error),
 	opts ...MapOption,
-) <-chan ferrors.Result[Out] {
+) <-chan fresult.Result[Out] {
 	cfg := &mapConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	out := make(chan ferrors.Result[Out], workers)
+	out := make(chan fresult.Result[Out], workers)
 	var wg sync.WaitGroup
 
 	for i := 0; i < workers; i++ {
@@ -63,7 +63,7 @@ func Map[In, Out any](
 							cfg.metrics.failed.Add(1)
 						}
 					}
-					out <- ferrors.Result[Out]{Value: val, Err: err}
+					out <- fresult.Result[Out]{Value: val, Err: err}
 				case <-ctx.Done():
 					return
 				}
@@ -85,7 +85,7 @@ func OrderedMap[In, Out any](
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) (Out, error),
-) <-chan ferrors.Result[Out] {
+) <-chan fresult.Result[Out] {
 	// wrap each item with its sequence number
 	type indexed struct {
 		idx  int
@@ -94,7 +94,7 @@ func OrderedMap[In, Out any](
 
 	type indexedResult struct {
 		idx int
-		res ferrors.Result[Out]
+		res fresult.Result[Out]
 	}
 
 	// index the input
@@ -132,7 +132,7 @@ func OrderedMap[In, Out any](
 					val, err := fn(ctx, idxItem.item)
 					rawOut <- indexedResult{
 						idx: idxItem.idx,
-						res: ferrors.Result[Out]{Value: val, Err: err},
+						res: fresult.Result[Out]{Value: val, Err: err},
 					}
 				case <-ctx.Done():
 					return
@@ -147,12 +147,12 @@ func OrderedMap[In, Out any](
 	}()
 
 	// reorder results by sequence number
-	out := make(chan ferrors.Result[Out], workers)
+	out := make(chan fresult.Result[Out], workers)
 	go func() {
 		defer close(out)
 
 		// buffer holds results that arrived early
-		buffer := make(map[int]ferrors.Result[Out])
+		buffer := make(map[int]fresult.Result[Out])
 		next := 0
 
 		for r := range rawOut {
@@ -180,8 +180,8 @@ func FlatMap[In, Out any](
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) ([]Out, error),
-) <-chan ferrors.Result[Out] {
-	out := make(chan ferrors.Result[Out], workers)
+) <-chan fresult.Result[Out] {
+	out := make(chan fresult.Result[Out], workers)
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -196,12 +196,12 @@ func FlatMap[In, Out any](
 					}
 					vals, err := fn(ctx, item)
 					if err != nil {
-						out <- ferrors.Result[Out]{Err: err}
+						out <- fresult.Result[Out]{Err: err}
 						continue
 					}
 					// emit each expanded item individually
 					for _, v := range vals {
-						out <- ferrors.Result[Out]{Value: v}
+						out <- fresult.Result[Out]{Value: v}
 					}
 				case <-ctx.Done():
 					return

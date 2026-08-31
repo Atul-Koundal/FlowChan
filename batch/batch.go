@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 //A batch stage collects individual items and groups them together before passing downstream. Two triggers flush a batch:
 
@@ -34,8 +34,8 @@ func New[T any](size int, timeout time.Duration) *Batcher[T] {
 
 //ctx context.Context → used for cancellation.
 //in <-chan T → receive-only channel from which items arrive.
-func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan ferrors.Result[[]T] {
-	out := make(chan ferrors.Result[[]T], 1)
+func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan fresult.Result[[]T] {
+	out := make(chan fresult.Result[[]T], 1)
 
 	go func() {
 		defer close(out)
@@ -53,7 +53,7 @@ func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan ferrors.Result
 			// doesn't overwrite this one
 			toSend := make([]T, len(batch))
 			copy(toSend, batch)
-			out <- ferrors.Result[[]T]{Value: toSend}
+			out <- fresult.Result[[]T]{Value: toSend}
 			batch = batch[:0] // reset without reallocating
 		}
 

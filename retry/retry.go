@@ -9,7 +9,7 @@ import (
 	"math/rand"
 	"time"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 //Backoff strategy is used when the probe fails to establish a connection or loses an existing connection
 //The probe tries to reestablish a connection after one second, two seconds, then four seconds, and so on
@@ -142,8 +142,8 @@ func Stream[In, Out any](
 	maxAttempts int,
 	strategy BackoffStrategy,
 	fn func(context.Context, In) (Out, error),
-) <-chan ferrors.Result[Out] {
-	out := make(chan ferrors.Result[Out], 1)
+) <-chan fresult.Result[Out] {
+	out := make(chan fresult.Result[Out], 1)
 
 	go func() {
 		defer close(out)
@@ -159,7 +159,7 @@ func Stream[In, Out any](
 				})
 
 				select {
-				case out <- ferrors.Result[Out]{Value: val, Err: err}:
+				case out <- fresult.Result[Out]{Value: val, Err: err}:
 				case <-ctx.Done():
 					return
 				}

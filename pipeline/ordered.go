@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 //Same as a stage but guarantees output order matches input order. 
@@ -29,7 +29,7 @@ func NewOrderedStage[In, Out any](workers int, fn func(context.Context, In) (Out
 	return &OrderedStage[In, Out]{workers: workers, fn: fn}
 }
 
-func (s *OrderedStage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+func (s *OrderedStage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 	// step 1: tag each input with a sequence number
 	indexed_in := make(chan indexed[In], s.workers)
 	go func() {
@@ -52,7 +52,7 @@ func (s *OrderedStage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fe
 	// step 2: process concurrently, emit tagged results
 	type indexedResult struct {
 		idx int
-		res ferrors.Result[Out]
+		res fresult.Result[Out]
 	}
 
 	rawOut := make(chan indexedResult, s.workers)
@@ -70,7 +70,7 @@ func (s *OrderedStage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fe
 					val, err := s.fn(ctx, item.value)
 					rawOut <- indexedResult{
 						idx: item.idx,
-						res: ferrors.Result[Out]{Value: val, Err: err},
+						res: fresult.Result[Out]{Value: val, Err: err},
 					}
 				case <-ctx.Done():
 					return
@@ -85,10 +85,10 @@ func (s *OrderedStage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fe
 	}()
 
 	// step 3: reorder by sequence number before emitting
-	out := make(chan ferrors.Result[Out], s.workers)
+	out := make(chan fresult.Result[Out], s.workers)
 	go func() {
 		defer close(out)
-		pending := make(map[int]ferrors.Result[Out])
+		pending := make(map[int]fresult.Result[Out])
 		next := 0
 
 		for r := range rawOut {

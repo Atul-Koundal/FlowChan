@@ -5,7 +5,7 @@ package iter
 import (
 	"context"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // Seq is a push iterator that calls yield for each item. Returning
@@ -35,7 +35,7 @@ func FromChan[T any](ctx context.Context, ch <-chan T) Seq[T] {
 }
 
 // FromResults converts a Result channel into a SeqErr iterator.
-func FromResults[T any](ctx context.Context, ch <-chan ferrors.Result[T]) SeqErr[T] {
+func FromResults[T any](ctx context.Context, ch <-chan fresult.Result[T]) SeqErr[T] {
 	return func(yield func(T, error) bool) {
 		for {
 			select {

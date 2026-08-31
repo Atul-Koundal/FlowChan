@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // Stage represents a single concurrent transformation step.
@@ -65,8 +65,8 @@ func NewStage[In, Out any](workers int, fn func(context.Context, In) (Out, error
 // Run starts the stage. It returns immediately with an output channel
 // that closes once all input has been processed or the context is done.
 // Panics inside fn are recovered and converted into Result errors.
-func (s *Stage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
-	out := make(chan ferrors.Result[Out], s.workers)
+func (s *Stage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
+	out := make(chan fresult.Result[Out], s.workers)
 
 	var limiter *time.Ticker
 	var limiterC <-chan time.Time
@@ -98,7 +98,7 @@ func (s *Stage[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.R
 // runWorker is the per-goroutine loop. Separated from Run so that
 // recover() cleanly catches a panic from a single item without
 // taking down the whole stage.
-func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<- ferrors.Result[Out], limiterC <-chan time.Time) {
+func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<- fresult.Result[Out], limiterC <-chan time.Time) {
 	for {
 		select {
 		case val, ok := <-in:
@@ -129,7 +129,7 @@ func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<-
 			}
 
 			select {
-			case out <- ferrors.Result[Out]{Value: result, Err: err}:
+			case out <- fresult.Result[Out]{Value: result, Err: err}:
 			case <-ctx.Done():
 				return
 			}
@@ -161,7 +161,7 @@ func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err erro
 
 // Pipeline chains multiple stages so the output of one feeds the next.
 type Pipeline[In, Out any] struct {
-	run func(context.Context, <-chan In) <-chan ferrors.Result[Out]
+	run func(context.Context, <-chan In) <-chan fresult.Result[Out]
 }
 
 // Chain connects two stages into a single pipeline. Errors produced
@@ -174,11 +174,11 @@ func Chain[In, Mid, Out any](
 	second *Stage[Mid, Out],
 ) *Pipeline[In, Out] {
 	return &Pipeline[In, Out]{
-		run: func(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+		run: func(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 			midResults := first.Run(ctx, in)
 
 			midValues := make(chan Mid, first.workers)
-			errOut := make(chan ferrors.Result[Out], first.workers)
+			errOut := make(chan fresult.Result[Out], first.workers)
 
 			go func() {
 				defer close(midValues)
@@ -186,7 +186,7 @@ func Chain[In, Mid, Out any](
 				for r := range midResults {
 					if r.Err != nil {
 						select {
-						case errOut <- ferrors.Result[Out]{Err: r.Err}:
+						case errOut <- fresult.Result[Out]{Err: r.Err}:
 						case <-ctx.Done():
 							return
 						}
@@ -202,7 +202,7 @@ func Chain[In, Mid, Out any](
 
 			secondOut := second.Run(ctx, midValues)
 
-			finalOut := make(chan ferrors.Result[Out], second.workers)
+			finalOut := make(chan fresult.Result[Out], second.workers)
 			var wg sync.WaitGroup
 			wg.Add(2)
 
@@ -240,6 +240,6 @@ func Chain[In, Mid, Out any](
 
 // Run executes the pipeline against in and returns the combined
 // output stream from all stages.
-func (p *Pipeline[In, Out]) Run(ctx context.Context, in <-chan In) <-chan ferrors.Result[Out] {
+func (p *Pipeline[In, Out]) Run(ctx context.Context, in <-chan In) <-chan fresult.Result[Out] {
 	return p.run(ctx, in)
 }

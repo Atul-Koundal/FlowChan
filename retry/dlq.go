@@ -3,7 +3,7 @@ package retry
 import (
 	"context"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 // FailedItem carries an item that exhausted all retry attempts along
@@ -24,8 +24,8 @@ func StreamWithDLQ[In, Out any](
 	maxAttempts int,
 	strategy BackoffStrategy,
 	fn func(context.Context, In) (Out, error),
-) (<-chan ferrors.Result[Out], <-chan FailedItem[In]) {
-	out := make(chan ferrors.Result[Out], 1)
+) (<-chan fresult.Result[Out], <-chan FailedItem[In]) {
+	out := make(chan fresult.Result[Out], 1)
 	dlq := make(chan FailedItem[In], 1)
 
 	go func() {
@@ -53,7 +53,7 @@ func StreamWithDLQ[In, Out any](
 				} else {
 					// success - route to main output
 					select {
-					case out <- ferrors.Result[Out]{Value: val}:
+					case out <- fresult.Result[Out]{Value: val}:
 					case <-ctx.Done():
 						return
 					}

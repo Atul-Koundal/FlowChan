@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
 //Parallel map with a safety valve.
@@ -19,11 +19,11 @@ func BackpressureMap[In, Out any](
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) (Out, error),
-) <-chan ferrors.Result[Out] {
+) <-chan fresult.Result[Out] {
 	// semaphore limits how many items are in-flight at once
 	// when all slots are taken, reading from `in` blocks naturally
 	sem := make(chan struct{}, workers)
-	out := make(chan ferrors.Result[Out], workers)
+	out := make(chan fresult.Result[Out], workers)
 
 	var wg sync.WaitGroup
 
@@ -55,7 +55,7 @@ func BackpressureMap[In, Out any](
 
 					val, err := fn(ctx, it)
 					select {
-					case out <- ferrors.Result[Out]{Value: val, Err: err}:
+					case out <- fresult.Result[Out]{Value: val, Err: err}:
 					case <-ctx.Done():
 					}
 				}(item)

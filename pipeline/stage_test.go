@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	ferrors "github.com/Atul-Koundal/FlowChan/errors"
+	fresult "github.com/Atul-Koundal/FlowChan/result"
 
 	"go.uber.org/goleak"
 )
@@ -26,8 +26,8 @@ func toChan[T any](items ...T) <-chan T {
 }
 
 // helper - collects all results from a channel into a slice
-func collect[T any](ch <-chan ferrors.Result[T]) []ferrors.Result[T] {
-	var results []ferrors.Result[T]
+func collect[T any](ch <-chan fresult.Result[T]) []fresult.Result[T] {
+	var results []fresult.Result[T]
 	for r := range ch {
 		results = append(results, r)
 	}
