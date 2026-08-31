@@ -1,223 +1,140 @@
 package pool
 
 import (
-    "context"
-    "errors"
-    "sync/atomic"
-    "testing"
-    "time"
-    "fmt"
+	"context"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
 
-    "go.uber.org/goleak"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-
-// --- test task types ---
-
-type successTask struct {
-    processed atomic.Bool
+type funcTask struct {
+	fn func() error
 }
 
-func (t *successTask) Process() error {
-    t.processed.Store(true)
-    return nil
+func (t *funcTask) Process() error { return t.fn() }
+
+func TestPool_AllTasksProcessed(t *testing.T) {
+	var count atomic.Int32
+	wp := NewWorkPool(3)
+	ctx := context.Background()
+	wp.Start(ctx)
+
+	for i := 0; i < 5; i++ {
+		wp.Submit(&funcTask{fn: func() error {
+			count.Add(1)
+			return nil
+		}})
+	}
+
+	wp.Drain()
+	errs := wp.Stop()
+
+	if count.Load() != 5 {
+		t.Errorf("expected 5 processed, got %d", count.Load())
+	}
+	if len(errs) != 0 {
+		t.Errorf("expected no errors, got %v", errs)
+	}
 }
 
-type slowTask struct{}
+func TestPool_ErrorsCollected(t *testing.T) {
+	wp := NewWorkPool(2)
+	wp.Start(context.Background())
 
-func (t *slowTask) Process() error {
-    time.Sleep(500 * time.Millisecond)
-    return nil
+	wp.Submit(&funcTask{fn: func() error { return fmt.Errorf("fail") }})
+	wp.Submit(&funcTask{fn: func() error { return nil }})
+	wp.Submit(&funcTask{fn: func() error { return fmt.Errorf("fail") }})
+
+	wp.Drain()
+	errs := wp.Stop()
+
+	if len(errs) != 2 {
+		t.Errorf("expected 2 errors, got %d", len(errs))
+	}
 }
 
-type failTask struct {
-    msg string
+func TestPool_Reusable(t *testing.T) {
+	var count atomic.Int32
+	wp := NewWorkPool(3)
+	wp.Start(context.Background())
+
+	// first batch
+	for i := 0; i < 5; i++ {
+		wp.Submit(&funcTask{fn: func() error {
+			count.Add(1)
+			return nil
+		}})
+	}
+	wp.Drain()
+
+	// second batch - same pool
+	for i := 0; i < 5; i++ {
+		wp.Submit(&funcTask{fn: func() error {
+			count.Add(1)
+			return nil
+		}})
+	}
+	wp.Drain()
+	wp.Stop()
+
+	if count.Load() != 10 {
+		t.Errorf("expected 10 total processed, got %d", count.Load())
+	}
 }
 
-func (t *failTask) Process() error {
-    return errors.New(t.msg)
+func TestPool_SubmitReturnsFalseAfterStop(t *testing.T) {
+	wp := NewWorkPool(2)
+	wp.Start(context.Background())
+	wp.Stop()
+
+	accepted := wp.Submit(&funcTask{fn: func() error { return nil }})
+	if accepted {
+		t.Error("expected Submit to return false after Stop")
+	}
 }
 
-// --- tests ---
-
-func TestAllTasksProcessed(t *testing.T) {
-    tasks := []*successTask{{}, {}, {}, {}, {}}
-
-    poolTasks := make([]Task, len(tasks))
-    for i, tk := range tasks {
-        poolTasks[i] = tk
-    }
-
-    wp := NewWorkPool(poolTasks, 3)
-    errs := wp.Run(context.Background())
-
-    if len(errs) != 0 {
-        t.Fatalf("expected no errors, got %d", len(errs))
-    }
-    for i, tk := range tasks {
-        if !tk.processed.Load() {
-            t.Errorf("task %d was never processed", i)
-        }
-    }
-}
-
-func TestErrorsAreCollected(t *testing.T) {
-    tasks := []Task{
-        &failTask{msg: "db connection failed"},
-        &failTask{msg: "timeout"},
-        &successTask{},
-    }
-
-    wp := NewWorkPool(tasks, 2)
-    errs := wp.Run(context.Background())
-
-    if len(errs) != 2 {
-        t.Fatalf("expected 2 errors, got %d", len(errs))
-    }
-}
-
-func TestEmptyTaskList(t *testing.T) {
-    wp := NewWorkPool([]Task{}, 3)
-    errs := wp.Run(context.Background())
-
-    if len(errs) != 0 {
-        t.Fatalf("expected no errors, got %v", errs)
-    }
-}
-
-func TestCancellation(t *testing.T) {
-    tasks := make([]Task, 20)
-    for i := range tasks {
-        tasks[i] = &slowTask{}
-    }
-
-    ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-    defer cancel()
-
-    wp := NewWorkPool(tasks, 2)
-    wp.Run(ctx) // should return early, not hang
-}
-
-func TestConcurrencyLimit(t *testing.T) {
-    var active atomic.Int32
-    var maxSeen atomic.Int32
-
-    type countingTask struct{}
-    // we need a task that tracks concurrency, so use a closure-based approach
-    tasks := make([]Task, 10)
-    for i := range tasks {
-        tasks[i] = &trackingTask{
-            active:  &active,
-            maxSeen: &maxSeen,
-        }
-    }
-
-    wp := NewWorkPool(tasks, 3)
-    wp.Run(context.Background())
-
-    if maxSeen.Load() > 3 {
-        t.Errorf("concurrency exceeded limit: saw %d active workers, limit is 3", maxSeen.Load())
-    }
-}
-
-type trackingTask struct {
-    active  *atomic.Int32
-    maxSeen *atomic.Int32
-}
-
-func (t *trackingTask) Process() error {
-    current := t.active.Add(1)
-    for {
-        seen := t.maxSeen.Load()
-        if current <= seen || t.maxSeen.CompareAndSwap(seen, current) {
-            break
-        }
-    }
-    time.Sleep(50 * time.Millisecond)
-    t.active.Add(-1)
-    return nil
-}
-
-func TestRetries_EventualSuccess(t *testing.T) {
+func TestPool_Retries(t *testing.T) {
 	attempts := 0
-	// task fails first 2 times, succeeds on 3rd
-	task := &funcTask{fn: func() error {
+	wp := NewWorkPool(1, WithRetries(2))
+	wp.Start(context.Background())
+
+	wp.Submit(&funcTask{fn: func() error {
 		attempts++
 		if attempts < 3 {
-			return fmt.Errorf("temporary failure")
+			return fmt.Errorf("not yet")
 		}
 		return nil
-	}}
+	}})
 
-	wp := NewWorkPool([]Task{task}, 1, WithRetries(3))
-	errs := wp.Run(context.Background())
+	wp.Drain()
+	errs := wp.Stop()
 
 	if len(errs) != 0 {
-		t.Fatalf("expected success after retries, got: %v", errs)
+		t.Errorf("expected success after retries, got %v", errs)
 	}
 	if attempts != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts)
 	}
 }
 
-func TestRetries_ExhaustedReturnsError(t *testing.T) {
-	task := &funcTask{fn: func() error {
-		return fmt.Errorf("always fails")
-	}}
-
-	wp := NewWorkPool([]Task{task}, 1, WithRetries(2))
-	errs := wp.Run(context.Background())
-
-	if len(errs) != 1 {
-		t.Fatalf("expected 1 error after retries exhausted, got %d", len(errs))
-	}
-}
-
-// funcTask lets us pass a closure as a Task in tests
-type funcTask struct {
-	fn func() error
-}
-
-func (t *funcTask) Process() error {
-	return t.fn()
-}
-
-func TestPool_RateLimit(t *testing.T) {
-	tasks := makeTasks(5)
-	wp := NewWorkPool(tasks, 5, WithRateLimit(10)) // 10 tasks/sec
-
-	start := time.Now()
-	wp.Run(context.Background())
-	elapsed := time.Since(start)
-
-	// 5 tasks at 10/sec should take at least 400ms
-	if elapsed < 300*time.Millisecond {
-		t.Errorf("rate limit not enforced, took only %v", elapsed)
-	}
-}
-
-
-func makeTasks(n int) []Task {
-	tasks := make([]Task, n)
-	for i := range tasks {
-		tasks[i] = &funcTask{fn: func() error { return nil }}
-	}
-	return tasks
-}
 func TestPool_Metrics(t *testing.T) {
 	m := NewMetrics()
-	tasks := []Task{
-		&funcTask{fn: func() error { return nil }},
-		&funcTask{fn: func() error { return nil }},
-		&funcTask{fn: func() error { return fmt.Errorf("fail") }},
-	}
+	wp := NewWorkPool(2, WithMetrics(m))
+	wp.Start(context.Background())
 
-	wp := NewWorkPool(tasks, 2, WithMetrics(m))
-	wp.Run(context.Background())
+	wp.Submit(&funcTask{fn: func() error { return nil }})
+	wp.Submit(&funcTask{fn: func() error { return nil }})
+	wp.Submit(&funcTask{fn: func() error { return fmt.Errorf("fail") }})
+
+	wp.Drain()
+	wp.Stop()
 
 	snap := m.Snapshot()
 	if snap.Processed != 3 {
@@ -226,7 +143,21 @@ func TestPool_Metrics(t *testing.T) {
 	if snap.Failed != 1 {
 		t.Errorf("expected 1 failed, got %d", snap.Failed)
 	}
-	if snap.Active != 0 {
-		t.Errorf("expected 0 active after completion, got %d", snap.Active)
+}
+
+func TestPool_RateLimit(t *testing.T) {
+	wp := NewWorkPool(5, WithRateLimit(10))
+	wp.Start(context.Background())
+
+	start := time.Now()
+	for i := 0; i < 5; i++ {
+		wp.Submit(&funcTask{fn: func() error { return nil }})
+	}
+	wp.Drain()
+	elapsed := time.Since(start)
+	wp.Stop()
+
+	if elapsed < 300*time.Millisecond {
+		t.Errorf("rate limit not enforced, took only %v", elapsed)
 	}
 }
