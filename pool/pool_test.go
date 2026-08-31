@@ -146,7 +146,7 @@ func TestPool_Metrics(t *testing.T) {
 }
 
 func TestPool_RateLimit(t *testing.T) {
-	wp := NewWorkPool(5, WithRateLimit(10))
+	wp := NewWorkPool(5, WithRateLimit(5)) // 5 tasks/sec
 	wp.Start(context.Background())
 
 	start := time.Now()
@@ -157,7 +157,8 @@ func TestPool_RateLimit(t *testing.T) {
 	elapsed := time.Since(start)
 	wp.Stop()
 
-	if elapsed < 300*time.Millisecond {
+	// 5 tasks at 5/sec should take at least 800ms
+	if elapsed < 600*time.Millisecond {
 		t.Errorf("rate limit not enforced, took only %v", elapsed)
 	}
 }

@@ -33,6 +33,8 @@ type WorkPool struct {
 	stopCh      chan struct{}
 	mu          sync.Mutex
 	errs        []error
+	limiterC    <-chan time.Time // rate limiter channel
+	ticker      *time.Ticker    // kept to stop it on shutdown
 }
 
 // Option configures a WorkPool.
@@ -74,22 +76,16 @@ func NewWorkPool(concurrency int, opts ...Option) *WorkPool {
 // Safe to call only once — subsequent calls are no-ops.
 func (wp *WorkPool) Start(ctx context.Context) {
 	wp.once.Do(func() {
-		var limiterC <-chan time.Time
 		if wp.rateLimit > 0 {
-			ticker := time.NewTicker(time.Second / time.Duration(wp.rateLimit))
-			limiterC = ticker.C
-			go func() {
-				<-wp.stopCh
-				ticker.Stop()
-			}()
+			wp.ticker = time.NewTicker(time.Second / time.Duration(wp.rateLimit))
+			wp.limiterC = wp.ticker.C
 		}
 
 		for i := 0; i < wp.concurrency; i++ {
 			wp.wg.Add(1)
-			go wp.worker(ctx, limiterC)
+			go wp.worker(ctx)
 		}
 
-		// collect errors from workers
 		go func() {
 			for err := range wp.errors {
 				wp.mu.Lock()
@@ -102,6 +98,8 @@ func (wp *WorkPool) Start(ctx context.Context) {
 
 // Submit sends a task to the pool for processing. Blocks if all
 // workers are busy. Returns false if the pool has been stopped.
+// Submit sends a task to the pool for processing. Blocks if all
+// workers are busy. Returns false if the pool has been stopped.
 func (wp *WorkPool) Submit(task Task) bool {
 	select {
 	case <-wp.stopCh:
@@ -109,9 +107,16 @@ func (wp *WorkPool) Submit(task Task) bool {
 	default:
 	}
 
-	defer func() {
-		recover() // catch send on closed channel race
-	}()
+	// enforce rate limit before accepting the task
+	if wp.limiterC != nil {
+		select {
+		case <-wp.limiterC:
+		case <-wp.stopCh:
+			return false
+		}
+	}
+
+	defer func() { recover() }()
 
 	select {
 	case wp.tasksChan <- task:
@@ -148,13 +153,17 @@ func (wp *WorkPool) Stop() []error {
 	wp.wg.Wait()
 	close(wp.errors)
 
+	if wp.ticker != nil {
+		wp.ticker.Stop()
+	}
+
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 	return wp.errs
 }
 
 // worker is the per-goroutine loop.
-func (wp *WorkPool) worker(ctx context.Context, limiterC <-chan time.Time) {
+func (wp *WorkPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 	for {
 		select {
@@ -165,16 +174,6 @@ func (wp *WorkPool) worker(ctx context.Context, limiterC <-chan time.Time) {
 			if s, ok := task.(*sentinelTask); ok {
 				s.wg.Done()
 				continue
-			}
-			// wait for rate limiter before processing
-			if limiterC != nil {
-				select {
-				case <-limiterC:
-				case <-ctx.Done():
-					return
-				case <-wp.stopCh:
-					return
-				}
 			}
 			if wp.metrics != nil {
 				wp.metrics.active.Add(1)
