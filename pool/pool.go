@@ -104,6 +104,16 @@ func (wp *WorkPool) Start(ctx context.Context) {
 // workers are busy. Returns false if the pool has been stopped.
 func (wp *WorkPool) Submit(task Task) bool {
 	select {
+	case <-wp.stopCh:
+		return false
+	default:
+	}
+
+	defer func() {
+		recover() // catch send on closed channel race
+	}()
+
+	select {
 	case wp.tasksChan <- task:
 		return true
 	case <-wp.stopCh:
