@@ -1,29 +1,13 @@
 package stream
 
-import "sync/atomic"
-
-// atomicInt64 wraps atomic.Int64 for use in Metrics.
-type atomicInt64 struct {
-	v atomic.Int64
-}
-
-func (a *atomicInt64) Add(delta int64) { a.v.Add(delta) }
-func (a *atomicInt64) Load() int64     { return a.v.Load() }
-
-// atomicInt32 wraps atomic.Int32 for use in Metrics.
-type atomicInt32 struct {
-	v atomic.Int32
-}
-
-func (a *atomicInt32) Add(delta int32) { a.v.Add(delta) }
-func (a *atomicInt32) Load() int32     { return a.v.Load() }
+import "github.com/Atul-Koundal/FlowChan/internal/xatomic"
 
 // Metrics holds live counters for a running stream operation.
 // Safe to read from any goroutine while the stream is running.
 type Metrics struct {
-	processed atomicInt64
-	failed    atomicInt64
-	active    atomicInt32
+	processed xatomic.Int64
+	failed    xatomic.Int64
+	active    xatomic.Int32
 }
 
 // NewMetrics returns a fresh zeroed Metrics collector.
