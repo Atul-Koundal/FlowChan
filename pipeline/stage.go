@@ -16,22 +16,22 @@ import (
 // It reads from an input channel, applies fn using the configured
 // number of workers, and writes results to an output channel.
 type Stage[In, Out any] struct {
-	workers   int
-	fn        func(context.Context, In) (Out, error)
-	rateLimit int // items per second, 0 means unlimited
+	name        string
+	workers     int
+	fn          func(context.Context, In) (Out, error)
+	rateLimit   int
 	itemTimeout time.Duration
-	metrics   *Metrics
+	metrics     *Metrics
 }
 
 // StageOption configures optional behaviour on a Stage.
 type StageOption[In, Out any] func(*Stage[In, Out])
 
-// WithItemTimeout sets a maximum duration for processing a single item.
-// If fn takes longer than the timeout, that item fails with a timeout
-// error and the next item is processed normally.
-func WithItemTimeout[In, Out any](d time.Duration) StageOption[In, Out] {
+// WithName sets the stage name used in error messages. Recommended
+// when chaining multiple stages so errors identify their source.
+func WithName[In, Out any](name string) StageOption[In, Out] {
 	return func(s *Stage[In, Out]) {
-		s.itemTimeout = d
+		s.name = name
 	}
 }
 
@@ -44,11 +44,19 @@ func WithRateLimit[In, Out any](itemsPerSecond int) StageOption[In, Out] {
 }
 
 // WithMetrics attaches a Metrics collector to the stage. Call Snapshot()
-// on it at any time, from any goroutine, to inspect throughput, failures,
-// and active workers while the stage is running.
+// at any time to inspect throughput, failures, and active workers.
 func WithMetrics[In, Out any](m *Metrics) StageOption[In, Out] {
 	return func(s *Stage[In, Out]) {
 		s.metrics = m
+	}
+}
+
+// WithItemTimeout sets a maximum duration for processing a single item.
+// If fn takes longer than the timeout, that item fails with a timeout
+// error and the next item is processed normally.
+func WithItemTimeout[In, Out any](d time.Duration) StageOption[In, Out] {
+	return func(s *Stage[In, Out]) {
+		s.itemTimeout = d
 	}
 }
 
@@ -141,9 +149,9 @@ func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<-
 }
 
 // process calls fn with an optional per-item timeout and recovers
-// any panic, converting it into an error.
+// any panic, converting it into an error so a single bad item
+// cannot crash the whole stage.
 func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err error) {
-	// wrap context with item timeout if configured
 	if s.itemTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.itemTimeout)
@@ -156,7 +164,15 @@ func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err erro
 		}
 	}()
 
-	return s.fn(ctx, val)
+	out, err = s.fn(ctx, val)
+	if err != nil && s.name != "" {
+		err = &fresult.StageError{
+			Stage:   s.name,
+			Attempt: 1,
+			Err:     err,
+		}
+	}
+	return out, err
 }
 
 // Pipeline chains multiple stages so the output of one feeds the next.
@@ -166,9 +182,8 @@ type Pipeline[In, Out any] struct {
 
 // Chain connects two stages into a single pipeline. Errors produced
 // by the first stage are NOT dropped - they are forwarded directly
-// to the final output as Result[Out]{Err: ...}, alongside results
-// from the second stage. Only successful values from the first stage
-// are passed into the second.
+// to the final output, alongside results from the second stage.
+// Only successful values from the first stage are passed into the second.
 func Chain[In, Mid, Out any](
 	first *Stage[In, Mid],
 	second *Stage[Mid, Out],
