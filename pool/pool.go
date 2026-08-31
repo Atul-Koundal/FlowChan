@@ -162,15 +162,17 @@ func (wp *WorkPool) worker(ctx context.Context, limiterC <-chan time.Time) {
 			if !ok {
 				return
 			}
-			// skip sentinel tasks - they are only used by Drain
 			if s, ok := task.(*sentinelTask); ok {
 				s.wg.Done()
 				continue
 			}
+			// wait for rate limiter before processing
 			if limiterC != nil {
 				select {
 				case <-limiterC:
 				case <-ctx.Done():
+					return
+				case <-wp.stopCh:
 					return
 				}
 			}
@@ -189,7 +191,6 @@ func (wp *WorkPool) worker(ctx context.Context, limiterC <-chan time.Time) {
 				select {
 				case wp.errors <- err:
 				default:
-					// error buffer full - store directly
 					wp.mu.Lock()
 					wp.errs = append(wp.errs, err)
 					wp.mu.Unlock()
