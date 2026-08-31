@@ -1,26 +1,28 @@
 package pipeline
 
-// Metrics holds live counters for a running stage. Safe to read
-// from any goroutine while the stage is running.
+import "github.com/Atul-Koundal/FlowChan/internal/xatomic"
+
+// Metrics holds live counters for a running stage.
+// Safe to read from any goroutine while the stage is running.
 type Metrics struct {
-	processed atomicInt64
-	failed    atomicInt64
-	active    atomicInt32
+	processed xatomic.Int64
+	failed    xatomic.Int64
+	active    xatomic.Int32
 }
 
-// NewMetrics returns a fresh, zeroed Metrics collector.
+// NewMetrics returns a fresh zeroed Metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{}
 }
 
-// MetricsSnapshot is a point-in-time copy of the current counter values.
+// MetricsSnapshot is a point-in-time copy of the current counters.
 type MetricsSnapshot struct {
-	Processed int64 // total items completed (success or failure)
-	Failed    int64 // total items that returned an error
-	Active    int32 // workers currently processing an item right now
+	Processed int64
+	Failed    int64
+	Active    int32
 }
 
-// Snapshot takes a point-in-time reading of the metrics. Safe to call
+// Snapshot returns the current counter values. Safe to call
 // concurrently while the stage is running.
 func (m *Metrics) Snapshot() MetricsSnapshot {
 	return MetricsSnapshot{
