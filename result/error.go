@@ -1,6 +1,15 @@
 package result
 
-import "fmt"
+import(
+	"fmt"
+	"errors"
+) 
+
+// As is errors.As for convenience - finds the first error in err's
+// chain that matches target.
+func As(err error, target any) bool {
+	return errors.As(err, target)
+}
 
 // StageError is returned when a pipeline stage fails processing an item.
 // It carries the stage name, the item that failed, which attempt it was,
