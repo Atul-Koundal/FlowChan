@@ -6,8 +6,11 @@ package pool
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
+
+	"github.com/Atul-Koundal/FlowChan/result"
 )
 
 // Task is the interface any unit of work must satisfy to run in a
@@ -17,10 +20,9 @@ type Task interface {
 	Process() error
 }
 
-// WorkPool is a reusable pool of workers. Unlike the previous design,
-// a WorkPool can accept work continuously via Submit. Call Start once,
-// Submit tasks as they arrive, Drain to wait for the queue to empty,
-// and Stop to shut down workers cleanly.
+// WorkPool is a reusable pool of workers. Call Start once, Submit
+// tasks as they arrive, Drain to wait for the queue to empty, and
+// Stop to shut down workers cleanly.
 type WorkPool struct {
 	concurrency int
 	maxRetries  int
@@ -33,26 +35,29 @@ type WorkPool struct {
 	stopCh      chan struct{}
 	mu          sync.Mutex
 	errs        []error
-	limiterC    <-chan time.Time // rate limiter channel
-	ticker      *time.Ticker    // kept to stop it on shutdown
+	limiterC    <-chan time.Time
+	ticker      *time.Ticker
 }
 
 // Option configures a WorkPool.
 type Option func(*WorkPool)
 
 // WithRetries sets how many additional attempts a failing task gets
-// before its error is recorded.
+// before its error is recorded. A value of 3 means the task runs
+// at most 4 times total (1 original + 3 retries).
 func WithRetries(n int) Option {
 	return func(wp *WorkPool) { wp.maxRetries = n }
 }
 
 // WithRateLimit caps the pool to itemsPerSecond tasks across all
-// workers combined.
+// workers combined. Use this when tasks call external services
+// that enforce rate limits.
 func WithRateLimit(itemsPerSecond int) Option {
 	return func(wp *WorkPool) { wp.rateLimit = itemsPerSecond }
 }
 
-// WithMetrics attaches a Metrics collector to the pool.
+// WithMetrics attaches a Metrics collector to the pool. Call Snapshot()
+// at any time to inspect throughput, failures, and active workers.
 func WithMetrics(m *Metrics) Option {
 	return func(wp *WorkPool) { wp.metrics = m }
 }
@@ -96,10 +101,8 @@ func (wp *WorkPool) Start(ctx context.Context) {
 	})
 }
 
-// Submit sends a task to the pool for processing. Blocks if all
-// workers are busy. Returns false if the pool has been stopped.
-// Submit sends a task to the pool for processing. Blocks if all
-// workers are busy. Returns false if the pool has been stopped.
+// Submit sends a task to the pool for processing. Blocks if the
+// rate limit is active. Returns false if the pool has been stopped.
 func (wp *WorkPool) Submit(task Task) bool {
 	select {
 	case <-wp.stopCh:
@@ -107,7 +110,6 @@ func (wp *WorkPool) Submit(task Task) bool {
 	default:
 	}
 
-	// enforce rate limit before accepting the task
 	if wp.limiterC != nil {
 		select {
 		case <-wp.limiterC:
@@ -129,8 +131,6 @@ func (wp *WorkPool) Submit(task Task) bool {
 // Drain waits for all currently submitted tasks to finish.
 // New tasks can still be submitted after Drain returns.
 func (wp *WorkPool) Drain() {
-	// send sentinel tasks equal to worker count to ensure
-	// all workers have finished their current task
 	done := make(chan struct{})
 	go func() {
 		var wg sync.WaitGroup
@@ -145,8 +145,8 @@ func (wp *WorkPool) Drain() {
 }
 
 // Stop signals workers to exit and waits for all of them to finish.
-// After Stop, Submit will return false. Errors collected during the
-// run are returned.
+// After Stop, Submit will return false. Returns all errors collected
+// during the run including recovered panics.
 func (wp *WorkPool) Stop() []error {
 	close(wp.stopCh)
 	close(wp.tasksChan)
@@ -162,7 +162,8 @@ func (wp *WorkPool) Stop() []error {
 	return wp.errs
 }
 
-// worker is the per-goroutine loop.
+// worker is the per-goroutine loop. Exits when tasksChan closes,
+// context is cancelled, or Stop is called.
 func (wp *WorkPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 	for {
@@ -214,6 +215,8 @@ func (t *sentinelTask) Process() error {
 	return nil
 }
 
+// runWithRetry runs task.Process up to 1+maxRetries times. Returns
+// a PoolError wrapping the last error if all attempts fail.
 func (wp *WorkPool) runWithRetry(task Task) error {
 	var err error
 	for attempt := 0; attempt <= wp.maxRetries; attempt++ {
@@ -222,9 +225,15 @@ func (wp *WorkPool) runWithRetry(task Task) error {
 			return nil
 		}
 	}
-	return err
+	return &result.PoolError{
+		TaskType: reflect.TypeOf(task).Elem().Name(),
+		Attempts: wp.maxRetries + 1,
+		Err:      err,
+	}
 }
 
+// safeProcess calls task.Process and recovers any panic, converting
+// it into an error so one misbehaving task cannot crash the pool.
 func (wp *WorkPool) safeProcess(task Task) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
