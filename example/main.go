@@ -93,8 +93,14 @@ func runPool(ctx context.Context) {
 		&flakyTask{name: "report-job"},
 	}
 
-	wp := pool.NewWorkPool(tasks, 3, pool.WithRetries(3))
-	errs := wp.Run(ctx)
+	wp := pool.NewWorkPool(3, pool.WithRetries(3))
+	wp.Start(ctx)
+	for _, t := range tasks {
+		wp.Submit(t)
+	}
+	wp.Drain()
+	errs := wp.Stop()
+
 	if len(errs) > 0 {
 		fmt.Println("  errors:", errs)
 	} else {
