@@ -18,8 +18,6 @@ import (
 
 // BackoffStrategy takes the attempt number (starting at 0)
 // and returns how long to wait before the next attempt.
-
-// BackoffStrategy takes the attempt number and returns how long to wait.
 type BackoffStrategy func(attempt int) time.Duration
 
 // Fixed returns a strategy that always waits the same duration.
@@ -28,6 +26,16 @@ func Fixed(wait time.Duration) BackoffStrategy {
 		return wait
 	}
 }
+
+// ShouldRetryFunc is a function that decides whether an error is
+// worth retrying. Return true to retry, false to fail immediately.
+type ShouldRetryFunc func(err error) bool
+
+// AlwaysRetry retries on any error. This is the default behaviour.
+func AlwaysRetry(_ error) bool { return true }
+
+// NeverRetry never retries. Fails immediately on the first error.
+func NeverRetry(_ error) bool { return false }
 
 // Exponential returns a strategy that doubles the wait on each attempt,
 // capped at max.
@@ -79,36 +87,58 @@ func (e *RetryError) Unwrap() error {
 	return e.Last
 }
 
-// Do calls fn up to maxAttempts times with backoff between attempts.
-// Returns nil on first success. Respects context cancellation.
-func Do(ctx context.Context, maxAttempts int, strategy BackoffStrategy, fn func() error) error {
-	var lastErr error
+// Do calls fn up to maxAttempts times, waiting between attempts using
+// strategy. Returns nil on first success. If shouldRetry is provided,
+// a non-retryable error stops immediately without further attempts.
+// Respects context cancellation during wait periods.
+func Do(
+	ctx context.Context,
+	maxAttempts int,
+	strategy BackoffStrategy,
+	fn func() error,
+	shouldRetry ...ShouldRetryFunc,
+) error {
+	retryable := AlwaysRetry
+	if len(shouldRetry) > 0 && shouldRetry[0] != nil {
+		retryable = shouldRetry[0]
+	}
 
+	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		lastErr = fn()
 		if lastErr == nil {
-			return nil // success
+			return nil
 		}
-
-		// last attempt - no point waiting
+		// stop immediately if error is not retryable
+		if !retryable(lastErr) {
+			return lastErr
+		}
 		if attempt == maxAttempts-1 {
 			break
 		}
-
 		wait := strategy(attempt)
 		select {
 		case <-time.After(wait):
-			// wait complete, try again
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-
 	return &RetryError{Attempts: maxAttempts, Last: lastErr}
 }
 
 // DoWithResult is like Do but fn returns a value alongside the error.
-func DoWithResult[T any](ctx context.Context, maxAttempts int, strategy BackoffStrategy, fn func() (T, error)) (T, error) {
+func DoWithResult[T any](
+	ctx context.Context,
+	maxAttempts int,
+	strategy BackoffStrategy,
+	fn func() (T, error),
+	shouldRetry ...ShouldRetryFunc,
+) (T, error) {
+	retryable := AlwaysRetry
+	if len(shouldRetry) > 0 && shouldRetry[0] != nil {
+		retryable = shouldRetry[0]
+	}
+
 	var lastErr error
 	var zero T
 
@@ -118,11 +148,12 @@ func DoWithResult[T any](ctx context.Context, maxAttempts int, strategy BackoffS
 			return val, nil
 		}
 		lastErr = err
-
+		if !retryable(lastErr) {
+			return zero, lastErr
+		}
 		if attempt == maxAttempts-1 {
 			break
 		}
-
 		wait := strategy(attempt)
 		select {
 		case <-time.After(wait):
@@ -130,18 +161,19 @@ func DoWithResult[T any](ctx context.Context, maxAttempts int, strategy BackoffS
 			return zero, ctx.Err()
 		}
 	}
-
 	return zero, &RetryError{Attempts: maxAttempts, Last: lastErr}
 }
 
 // Stream applies fn to each item from in, retrying failed items with
-// backoff before emitting an error downstream.
+// backoff. Pass an optional ShouldRetryFunc to stop retrying on
+// permanent errors immediately without exhausting all attempts.
 func Stream[In, Out any](
 	ctx context.Context,
 	in <-chan In,
 	maxAttempts int,
 	strategy BackoffStrategy,
 	fn func(context.Context, In) (Out, error),
+	shouldRetry ...ShouldRetryFunc,
 ) <-chan fresult.Result[Out] {
 	out := make(chan fresult.Result[Out], 1)
 
@@ -153,17 +185,15 @@ func Stream[In, Out any](
 				if !ok {
 					return
 				}
-
 				val, err := DoWithResult(ctx, maxAttempts, strategy, func() (Out, error) {
 					return fn(ctx, item)
-				})
+				}, shouldRetry...)
 
 				select {
 				case out <- fresult.Result[Out]{Value: val, Err: err}:
 				case <-ctx.Done():
 					return
 				}
-
 			case <-ctx.Done():
 				return
 			}
