@@ -1,4 +1,3 @@
-//For batching two or more messages/data/values flowing around the pipeline
 package batch
 
 import (
@@ -7,33 +6,39 @@ import (
 
 	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
-//A batch stage collects individual items and groups them together before passing downstream. Two triggers flush a batch:
 
-// 1. Size — batch hits N items, send it
-// 2.Timeout — not enough items came in but time ran out, send whatever you have
-
-
-//Yet to work on these comments......
-// Batch groups items from an input channel into batches based on a maximum size and a timeout.
-// A batch is emitted when it reaches the maximum size, the timeout expires, or the input channel closes.
-// This function never emits empty batches. The timeout countdown starts when the first item is added to a new batch.
-// To emit batches only when full, set the timeout to -1. Zero timeout is not supported and will panic
+// Batcher groups items from an input channel into batches, flushing
+// when either the batch reaches size items or timeout elapses,
+// whichever comes first. Call Flush() to trigger an immediate flush.
 type Batcher[T any] struct {
 	size    int
 	timeout time.Duration
+	flushCh chan struct{}
 }
 
-//The New function creates a Batcher instance and returns a pointer to it so its methods can be used without copying the struct.
+// New creates a Batcher that flushes when size items accumulate or
+// timeout elapses. Both triggers are active simultaneously.
 func New[T any](size int, timeout time.Duration) *Batcher[T] {
 	return &Batcher[T]{
 		size:    size,
 		timeout: timeout,
+		flushCh: make(chan struct{}, 1),
 	}
 }
 
+// Flush triggers an immediate flush of the current batch regardless
+// of size or timeout. Non-blocking - if a flush is already pending
+// it has no additional effect.
+func (b *Batcher[T]) Flush() {
+	select {
+	case b.flushCh <- struct{}{}:
+	default: // flush already pending, skip
+	}
+}
 
-//ctx context.Context → used for cancellation.
-//in <-chan T → receive-only channel from which items arrive.
+// Run starts batching items from in. The returned channel closes when
+// in closes or the context is cancelled. A final partial batch is
+// always flushed before the channel closes.
 func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan fresult.Result[[]T] {
 	out := make(chan fresult.Result[[]T], 1)
 
@@ -49,19 +54,16 @@ func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan fresult.Result
 			if len(batch) == 0 {
 				return
 			}
-			// copy before sending so the next batch
-			// doesn't overwrite this one
 			toSend := make([]T, len(batch))
 			copy(toSend, batch)
 			out <- fresult.Result[[]T]{Value: toSend}
-			batch = batch[:0] // reset without reallocating
+			batch = batch[:0]
 		}
 
 		for {
 			select {
 			case item, ok := <-in:
 				if !ok {
-					// input closed — flush whatever is left
 					flush()
 					return
 				}
@@ -72,10 +74,15 @@ func (b *Batcher[T]) Run(ctx context.Context, in <-chan T) <-chan fresult.Result
 				}
 
 			case <-ticker.C:
-				flush() // timeout hit — send partial batch
+				flush()
+
+			case <-b.flushCh:
+				// manual flush triggered by caller
+				flush()
+				ticker.Reset(b.timeout)
 
 			case <-ctx.Done():
-				flush() // cancelled — flush and exit
+				flush()
 				return
 			}
 		}
