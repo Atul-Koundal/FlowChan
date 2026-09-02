@@ -40,22 +40,40 @@ func makeTasks(n int) []pool.Task {
 
 func BenchmarkPool_10Tasks_3Workers(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		wp := pool.NewWorkPool(makeTasks(10), 3)
-		wp.Run(context.Background())
+		wp := pool.NewWorkPool(3)
+		ctx := context.Background()
+		wp.Start(ctx)
+		for _, t := range makeTasks(10) {
+			wp.Submit(t)
+		}
+		wp.Drain()
+		wp.Stop()
 	}
 }
 
 func BenchmarkPool_100Tasks_10Workers(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		wp := pool.NewWorkPool(makeTasks(100), 10)
-		wp.Run(context.Background())
+		wp := pool.NewWorkPool(10)
+		ctx := context.Background()
+		wp.Start(ctx)
+		for _, t := range makeTasks(100) {
+			wp.Submit(t)
+		}
+		wp.Drain()
+		wp.Stop()
 	}
 }
 
 func BenchmarkPool_1000Tasks_50Workers(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		wp := pool.NewWorkPool(makeTasks(1000), 50)
-		wp.Run(context.Background())
+		wp := pool.NewWorkPool(50)
+		ctx := context.Background()
+		wp.Start(ctx)
+		for _, t := range makeTasks(1000) {
+			wp.Submit(t)
+		}
+		wp.Drain()
+		wp.Stop()
 	}
 }
 
