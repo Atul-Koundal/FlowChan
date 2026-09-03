@@ -1,28 +1,27 @@
 # FlowChan
-FlowChan is a concurrency toolkit for Go. It gives you worker pools, typed pipelines, batching, streaming, retries, and graceful shutdown - so you focus on the logic, not the plumbing.
+
+FlowChan is a concurrency toolkit for Go. It gives you worker pools, typed pipelines, batching, streaming, retries, and graceful shutdown so you focus on the logic, not the plumbing.
 
 ```bash
-go get https://github.com/Atul-Koundal/FlowChan
+go get github.com/Atul-Koundal/FlowChan
 ```
-
----
 
 ## Goals
 
 **Make common concurrency tasks easier.**
-FlowChan provides a clean and safe way to solve common concurrency problems - parallel job execution, stream processing, batching, retries. It removes boilerplate and abstracts away the complexity of goroutine lifecycle, channel management, and error propagation. Developers retain full control over the concurrency level of every operation.
+FlowChan provides a clean and safe way to solve common concurrency problems: parallel job execution, stream processing, batching, retries. It removes boilerplate and abstracts away the complexity of goroutine lifecycle, channel management, and error propagation. Developers retain full control over the concurrency level of every operation.
 
 **Make concurrent code composable.**
 Most functions in the library take Go channels as inputs and return new transformed channels as outputs. This allows them to be chained together to build pipelines from simpler parts, similar to Unix pipes. Concurrent programs become clear sequences of reusable operations.
 
 **Centralize error handling.**
-Errors are carried through the pipeline automatically via the `Result[T]` type and can be handled in a single place at the end. Every value and its error travel together - nothing is silently dropped.
+Errors are carried through the pipeline automatically via the `Result[T]` type and can be handled in a single place at the end. Every value and its error travel together, nothing is silently dropped.
 
 **Support heterogeneous work.**
 Unlike stream-only libraries, FlowChan includes a task pool that runs different types of work concurrently through a common `Task` interface. Email sending, image resizing, and report generation can all run in the same pool without any shared type.
 
 **Handle real-world failure.**
-FlowChan includes retry strategies with fixed, exponential, and exponential-with-jitter backoff built in. Operations that fail temporarily can recover automatically without crashing the pipeline.
+FlowChan includes retry strategies with fixed, exponential, and exponential-with-jitter backoff built in. Operations that fail temporarily can recover automatically without crashing the pipeline. A should-retry predicate lets callers distinguish permanent errors from transient ones.
 
 **Shut down gracefully.**
 The termination package lets you signal shutdown and wait for all in-flight work to drain before the program exits. No goroutines are cut off mid-execution.
@@ -30,18 +29,15 @@ The termination package lets you signal shutdown and wait for all in-flight work
 **Keep it lightweight.**
 FlowChan has zero external dependencies. It operates entirely on standard Go channels and goroutines, making it straightforward to integrate into any existing project.
 
----
-
 ## Quick Start
 
-Let's look at a practical example: fetch users from an API, activate them, and save the changes back. It shows how to control concurrency at each step while keeping the code clean.
+Fetch users from an API, activate them, and save the changes back. Each step runs concurrently with independent worker counts.
 
 ```go
 func main() {
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
 
-    // convert a slice of IDs into a channel
     ids := make(chan int, 10)
     go func() {
         defer close(ids)
@@ -72,48 +68,75 @@ func main() {
 }
 ```
 
----
-
 ## Worker Pool
 
-Run different types of tasks concurrently. Any struct implementing `Process() error` is a task - the pool does not care what the work actually is.
+Run different types of tasks concurrently. Any struct implementing `Process() error` is a task. The pool does not care what the work actually is.
 
 ```go
 type EmailTask struct{ To, Subject string }
+
 func (t *EmailTask) Process() error {
     return sendEmail(t.To, t.Subject)
 }
 
-type ResizeTask struct{ File string; W, H int }
+type ResizeTask struct {
+    File string
+    W, H int
+}
+
 func (t *ResizeTask) Process() error {
     return resizeImage(t.File, t.W, t.H)
 }
 
-tasks := []pool.Task{
-    &EmailTask{To: "alice@example.com", Subject: "Welcome"},
-    &ResizeTask{File: "photo.jpg", W: 800, H: 600},
-}
+wp := pool.NewWorkPool(3)
+wp.Start(ctx)
 
-wp := pool.NewWorkPool(tasks, 3)
-errs := wp.Run(context.Background())
+wp.Submit(&EmailTask{To: "alice@example.com", Subject: "Welcome"})
+wp.Submit(&ResizeTask{File: "photo.jpg", W: 800, H: 600})
+
+wp.Drain()
+errs := wp.Stop()
 ```
 
 ### Retries
 
-Tasks that fail temporarily can be retried automatically before being counted as errors.
+Tasks that fail temporarily are retried automatically before being counted as errors.
 
 ```go
-wp := pool.NewWorkPool(tasks, 3, pool.WithRetries(3))
-errs := wp.Run(ctx)
+wp := pool.NewWorkPool(3, pool.WithRetries(3))
 ```
 
 The task runs up to 4 times total (1 original + 3 retries). If it succeeds on any attempt, no error is recorded.
 
----
+### Pool Metrics
+
+Attach a metrics collector to observe throughput and failures in real time.
+
+```go
+m := pool.NewMetrics()
+wp := pool.NewWorkPool(5, pool.WithMetrics(m))
+wp.Start(ctx)
+
+go func() {
+    for range time.Tick(time.Second) {
+        snap := m.Snapshot()
+        fmt.Printf("processed=%d failed=%d active=%d\n",
+            snap.Processed, snap.Failed, snap.Active)
+    }
+}()
+```
+
+### Rate Limiting
+
+Cap how many tasks are accepted per second across all workers.
+
+```go
+wp := pool.NewWorkPool(5, pool.WithRateLimit(10)) // max 10 tasks/sec
+```
 
 ## Batching
 
-Processing items in batches rather than individually can significantly improve performance when working with databases or external services. Batching reduces the number of queries and API calls, increases throughput, and typically lowers costs.
+Group items into batches before processing. Reduces database queries and API calls significantly.
 
 ```go
 b := batch.New[int](5, 500*time.Millisecond)
@@ -127,11 +150,20 @@ for r := range b.Run(ctx, ids) {
 }
 ```
 
+### Manual Flush
+
+Trigger an immediate flush on demand without waiting for size or timeout.
+
+```go
+b := batch.New[int](100, 10*time.Second)
+out := b.Run(ctx, in)
+
+b.Flush() // send current batch immediately
+```
+
 ### Real-Time Batching
 
-Real-world applications often handle events that arrive at unpredictable rates. While batching is still desirable for efficiency, waiting to collect a full batch introduces unacceptable delays when the input stream is slow or sparse.
-
-FlowChan solves this with a sliding window batcher. Batches flush either when they hit the size limit or when no new items arrive for the full window duration, whichever comes first.
+A sliding window batcher that only flushes after a period of silence. Useful for event streams where bursts should be processed together.
 
 ```go
 // flush when 100 items accumulate OR after 100ms of silence
@@ -142,47 +174,62 @@ for r := range b.Run(ctx, events) {
 }
 ```
 
----
-
 ## Errors, Termination and Contexts
 
-Error handling in concurrent programs is non-trivial. FlowChan simplifies this with the `Result[T]` type. Every value and its error travel together through the pipeline - errors are never lost or silently dropped.
+Every value and its error travel together through the pipeline via `Result[T]`. Errors are never lost or silently dropped.
 
 ```go
 for r := range out {
     val, err := r.Unwrap()
     if err != nil {
-        // handle error
         continue
     }
-    // use val
+    fmt.Println(val)
 }
 
-// helpers
+// check without unwrapping
 if r.IsErr() { ... }
 
 // transform without unwrapping
-mapped := errors.Map(r, func(n int) string {
+mapped := result.Map(r, func(n int) string {
     return fmt.Sprintf("id-%d", n)
 })
 
 // split a batch of results into values and errors
-values, errs := errors.Collect(results)
+values, errs := result.Collect(results)
 ```
 
-Context cancellation is respected everywhere. Pass a context with a timeout or cancel function and all goroutines exit cleanly.
+Context cancellation is respected everywhere. All goroutines exit cleanly when the context is cancelled.
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
 
-wp := pool.NewWorkPool(tasks, 5)
-errs := wp.Run(ctx) // stops cleanly when context times out
+wp := pool.NewWorkPool(5)
+wp.Start(ctx)
+```
+
+### Rich Error Types
+
+Errors from pipeline stages and pool tasks carry context about where and how they failed.
+
+```go
+var stageErr *result.StageError
+if errors.As(r.Err, &stageErr) {
+    fmt.Printf("stage %q failed on attempt %d: %v\n",
+        stageErr.Stage, stageErr.Attempt, stageErr.Err)
+}
+
+var poolErr *result.PoolError
+if errors.As(err, &poolErr) {
+    fmt.Printf("task %q failed after %d attempts: %v\n",
+        poolErr.TaskType, poolErr.Attempts, poolErr.Err)
+}
 ```
 
 ### Graceful Termination
 
-For cases where you need to stop accepting new work but still need in-flight work to finish, the termination package provides structured shutdown.
+Signal shutdown and wait for all in-flight work to drain before exiting.
 
 ```go
 term := termination.New()
@@ -201,60 +248,68 @@ term.Stop() // no new work accepted after this
 term.Wait() // blocks until all in-flight goroutines finish
 ```
 
----
-
 ## Order Preservation
 
-Concurrent processing can boost performance, but since tasks take different amounts of time, results usually arrive out of order. While this is acceptable in many scenarios, some cases require preserving the original input order.
-
-`NewOrderedStage` performs additional synchronization under the hood to ensure that if item X precedes item Y in the input, the result of X will precede the result of Y in the output.
+`NewOrderedStage` guarantees that if item X precedes item Y in the input, the result of X precedes the result of Y in the output, regardless of processing time.
 
 ```go
 stage := pipeline.NewOrderedStage(5, func(ctx context.Context, n int) (string, error) {
-    time.Sleep(time.Duration(10-n) * time.Millisecond) // variable processing time
+    time.Sleep(time.Duration(10-n) * time.Millisecond)
     return fmt.Sprintf("item-%d", n), nil
 })
 
-// output is always item-1, item-2, item-3... regardless of completion order
 for r := range stage.Run(ctx, in) {
-    fmt.Println(r.Value)
+    fmt.Println(r.Value) // always item-1, item-2, item-3...
 }
 ```
 
----
-
 ## Parallel Streaming and FlatMap
 
-FlatMap transforms each input item into multiple output items, then merges them all into a single stream. It gives full control over the concurrency level, meaning at most N input items are being expanded at the same time.
+FlatMap expands one item into many, merging all results into a single stream.
 
 ```go
-departments := toChan("IT", "Finance", "Marketing", "Engineering")
-
-// stream users from all departments concurrently
-// at most 3 departments processed at the same time
 users := stream.FlatMap(ctx, departments, 3,
     func(ctx context.Context, dept string) ([]User, error) {
         return api.GetUsersByDepartment(ctx, dept)
     })
-
-for r := range users {
-    fmt.Println(r.Value.Name)
-}
 ```
 
-For cases where order does not matter, `Map` is faster. When order must be preserved, use `OrderedMap`.
+Use `Map` when order does not matter. Use `OrderedMap` when it does.
 
 ```go
-// unordered - faster
-out := stream.Map(ctx, in, 5, fetchUser)
+out := stream.Map(ctx, in, 5, fetchUser)         // unordered, faster
+out := stream.OrderedMap(ctx, in, 5, fetchUser)  // ordered
+```
 
-// ordered - preserves input sequence
-out := stream.OrderedMap(ctx, in, 5, fetchUser)
+### Fan-out and Fan-in
+
+Distribute work across independent consumers and merge results back.
+
+```go
+// split one stream into 3 independent output channels
+outputs := stream.FanOut(ctx, in, 3)
+
+// merge multiple streams into one
+merged := stream.FanIn(ctx, outputs...)
+```
+
+### Split and Merge
+
+Route items to different channels based on a predicate, or combine multiple streams.
+
+```go
+// split by predicate
+evens, odds := stream.Split(ctx, in, func(n int) bool {
+    return n%2 == 0
+})
+
+// combine multiple streams
+out := stream.Merge(ctx, stream1, stream2, stream3)
 ```
 
 ### Backpressure
 
-When a fast producer feeds slow workers, unbounded memory growth is a real risk. `BackpressureMap` caps the number of in-flight items at any moment. When all worker slots are full, reading from the input channel blocks naturally, slowing the producer down.
+Cap in-flight items to prevent a fast producer from overwhelming slow workers.
 
 ```go
 out := stream.BackpressureMap(ctx, in, 3, func(ctx context.Context, n int) (int, error) {
@@ -262,22 +317,26 @@ out := stream.BackpressureMap(ctx, in, 3, func(ctx context.Context, n int) (int,
 })
 ```
 
----
+### Stream Metrics
+
+Observe throughput and failures on any stream operation.
+
+```go
+m := stream.NewMetrics()
+out := stream.Map(ctx, in, 5, fn, stream.WithMetrics(m))
+
+snap := m.Snapshot()
+fmt.Println(snap.Processed, snap.Failed, snap.Active)
+```
 
 ## Retry with Backoff
 
-Retrying failed operations is critical for building resilient systems. FlowChan provides three built-in backoff strategies and a stream-level retry wrapper that integrates directly into any pipeline.
+Three built-in backoff strategies for resilient operations.
 
 ```go
-// fixed - same wait every time
 retry.Fixed(1 * time.Second)
-
-// exponential - doubles every attempt, capped at max
 retry.Exponential(1*time.Second, 30*time.Second)
-
-// exponential with jitter - recommended for production
-// prevents thundering herd when many workers retry simultaneously
-retry.ExponentialJitter(1*time.Second, 30*time.Second)
+retry.ExponentialJitter(1*time.Second, 30*time.Second) // recommended for production
 ```
 
 Use `Do` for a single operation:
@@ -296,21 +355,93 @@ out := retry.Stream(ctx, in, 4,
     func(ctx context.Context, item int) (int, error) {
         return process(item)
     })
+```
+
+### Should-Retry Predicate
+
+Stop retrying immediately on permanent errors without exhausting all attempts.
+
+```go
+var ErrPermanent = errors.New("permanent")
+
+out := retry.Stream(ctx, in, 5, retry.ExponentialJitter(time.Second, 30*time.Second),
+    func(ctx context.Context, item int) (int, error) {
+        return process(item)
+    },
+    func(err error) bool {
+        return !errors.Is(err, ErrPermanent) // only retry non-permanent errors
+    },
+)
+```
+
+### Dead Letter Queue
+
+Route permanently failed items to a separate channel for inspection or reprocessing.
+
+```go
+out, dlq := retry.StreamWithDLQ(ctx, in, 3, retry.ExponentialJitter(time.Second, 30*time.Second), fn)
+
+go func() {
+    for failed := range dlq {
+        log.Printf("item %v failed permanently: %v", failed.Item, failed.Err)
+    }
+}()
 
 for r := range out {
-    if r.IsErr() {
-        fmt.Println("failed after all retries:", r.Err)
-        continue
-    }
-    fmt.Println("result:", r.Value)
+    fmt.Println(r.Value)
 }
 ```
 
----
+## Pipeline Builder
+
+Chain more than two stages together with correct error propagation at every step.
+
+```go
+stage1 := pipeline.NewStage(3, parseRaw, pipeline.WithName[string, int]("parse"))
+stage2 := pipeline.NewStage(3, validate, pipeline.WithName[int, int]("validate"))
+stage3 := pipeline.NewStage(3, store,    pipeline.WithName[int, string]("store"))
+
+b := pipeline.Pipe(pipeline.Pipe(pipeline.NewBuilder(stage1), stage2), stage3)
+
+for r := range b.Run(ctx, input) {
+    if r.IsErr() {
+        fmt.Println(r.Err) // includes stage name from StageError
+        continue
+    }
+    fmt.Println(r.Value)
+}
+```
+
+### Per-Item Timeout
+
+Set a deadline on individual items without cancelling the whole pipeline.
+
+```go
+stage := pipeline.NewStage(5, fetchUser,
+    pipeline.WithItemTimeout[int, *User](3*time.Second),
+)
+```
+
+### Pipeline Metrics
+
+Observe a running stage from a separate goroutine.
+
+```go
+m := pipeline.NewMetrics()
+stage := pipeline.NewStage(5, fn, pipeline.WithMetrics[int, int](m))
+
+go func() {
+    for range time.Tick(time.Second) {
+        snap := m.Snapshot()
+        fmt.Printf("processed=%d failed=%d active=%d\n",
+            snap.Processed, snap.Failed, snap.Active)
+    }
+}()
+```
 
 ## Go 1.23 Iterators
 
-FlowChan integrates with Go 1.23 range-over-function iterators. Convert any channel into an iterator and compose it with `Filter`, `Map`, and `Collect` without writing raw channel loops.
+Convert any channel into a composable iterator.
 
 ```go
 seq := iter.FromChan(ctx, numbersChan)
@@ -321,79 +452,54 @@ results := iter.Collect(
         func(n int) int { return n * 2 },
     ),
 )
-
-fmt.Println(results) // all even numbers, doubled
 ```
-
-Convert a result channel into an iterator:
-
-```go
-seq := iter.FromResults(ctx, resultsChan)
-seq(func(val int, err error) bool {
-    if err != nil {
-        return true // skip errors, continue
-    }
-    fmt.Println(val)
-    return true
-})
-```
-
----
 
 ## Testing Strategy
 
-All packages are tested with the `-race` flag. Tests are focused on:
-
-- **Correctness** - functions produce accurate results at different concurrency levels
-- **Cancellation** - context cancellation exits cleanly without goroutine leaks
-- **Error propagation** - errors flow through correctly and are never silently dropped
-- **Ordering** - ordered variants preserve input sequence, unordered variants do not
-- **Backpressure** - concurrency limits are strictly enforced under load
+All packages are tested with the `-race` flag and goroutine leak detection via `goleak`.
 
 ```bash
-# run all tests
-go test ./... -race
-
-# run with timeout to catch hangs
-go test ./... -race -timeout 30s
-
-# run a specific package
-go test ./retry/... -v -race
+go test ./... -race -timeout 60s
+go test ./benchmarks/... -bench=. -benchmem -count=3
 ```
 
----
+Tests cover correctness, cancellation, error propagation, ordering, backpressure, and concurrency limits.
 
 ## Project Structure
 
 ```
 flowchan/
 ├── go.mod
-├── pool/               # Task interface, WorkPool, retries
-├── errors/             # Result[T] - value + error carrier
+├── pool/               # Task interface, reusable WorkPool, retries, metrics
+├── result/             # Result[T], StageError, PoolError, RetryableError
 ├── pipeline/
-│   ├── stage.go        # Stage[In,Out], Chain
-│   └── ordered.go      # OrderedStage strict output ordering
-|   |__ metrics.go      # Throughput,latency,counters
-|   |__ atomic.go       # Atomic counters, flags, state
+│   ├── stage.go        # Stage[In,Out], Chain, WithName, WithItemTimeout
+│   ├── ordered.go      # OrderedStage - strict output ordering
+│   ├── builder.go      # Pipe - chain more than two stages
+│   └── metrics.go      # live throughput and failure counters
 ├── batch/
-│   ├── batch.go        # fixed size + timeout batching
+│   ├── batch.go        # fixed size + timeout batching, manual flush
 │   └── realtime.go     # sliding window realtime batching
 ├── stream/
-│   ├── stream.go       # Map, OrderedMap, FlatMap
-│   └── backpressure.go # BackpressureMap - concurrency cap
+│   ├── stream.go       # Map, OrderedMap, FlatMap, WithMetrics
+│   ├── fanout.go       # FanOut, FanIn
+│   ├── split.go        # Split, Merge
+│   └── backpressure.go # BackpressureMap
+├── retry/
+│   ├── retry.go        # Fixed, Exponential, ExponentialJitter, Do, Stream
+│   └── dlq.go          # StreamWithDLQ - dead letter queue
 ├── termination/        # graceful shutdown, drain in-flight work
-├── retry/              # Fixed, Exponential, ExponentialJitter backoff
 ├── iter/               # Seq iterators, Filter, Map, Collect
+├── internal/
+│   └── xatomic/        # shared atomic wrappers
 └── example/            # end-to-end usage of all packages
 ```
 
-Packages only depend downward. Nothing in `pool` imports `pipeline`. `errors` imports nothing from FlowChan. Any package can be used independently without pulling in the rest of the library.
+Packages only depend downward. Nothing in `pool` imports `pipeline`. `result` imports nothing from FlowChan. Any package can be used independently.
 
 ## Acknowledgements
 
-Thanks to [Rill](https://github.com/destel/rill) for being an amazing read and a source of inspiration for some of the concurrency patterns used in this project.
-
----
+Thanks to [Rill](https://github.com/destel/rill) for being an inspiring read and a source of ideas for some of the concurrency patterns used in this project.
 
 ## License
 
