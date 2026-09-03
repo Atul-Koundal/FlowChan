@@ -7,19 +7,18 @@ import (
 )
 
 func TestBatch_ManualFlush(t *testing.T) {
-	b := New[int](100, 10*time.Second) // large size and timeout
+	b := New[int](100, 10*time.Second)
 
 	in := make(chan int)
 	out := b.Run(context.Background(), in)
 
-	// send items after Run has started
 	go func() {
 		in <- 1
 		in <- 2
 		in <- 3
-		// small delay to ensure items are buffered inside the batcher
 		time.Sleep(20 * time.Millisecond)
 		b.Flush()
+		close(in) // close so batcher goroutine exits cleanly
 	}()
 
 	select {
@@ -32,5 +31,9 @@ func TestBatch_ManualFlush(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for manual flush")
+	}
+
+	// drain out so the batcher goroutine can exit
+	for range out {
 	}
 }
