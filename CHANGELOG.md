@@ -7,58 +7,53 @@ FlowChan uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-06-17
+## [0.2.0] - 2026-10-13
 
 ### Added
 
 **`pool/`**
-- `Task` interface for heterogeneous concurrent work
-- `WorkPool` runs any mix of task types across N workers
-- `WithRetries` option for automatic retry on failure
-- Panic recovery converts panics to errors instead of crashing
+- Reusable WorkPool with Start, Submit, Drain, Stop API
+- WithRateLimit option to cap tasks per second
+- WithMetrics option for live throughput and failure counters
+- Panic recovery in safeProcess converts panics to errors
+- Rich PoolError type carries task type name and attempt count
 
-**`errors/`**
-- `Result[T]` carries a value and error together through channels
-- `Map` transforms a result value without unwrapping
-- `Collect` splits a slice of results into values and errors
+**`result/`**
+- Renamed from errors/ to avoid shadowing Go standard library
+- StageError carries stage name and attempt number
+- PoolError carries task type and attempt count
+- RetryableError distinguishes transient from permanent failures
+- IsRetryable helper for should-retry predicates
 
 **`pipeline/`**
-- `Stage[In, Out]` generic concurrent transformation stage
-- `NewOrderedStage` preserves input order in output
-- `Chain` connects two stages with correct error propagation
-- `WithRateLimit` caps throughput across all workers
-- `WithMetrics` exposes live counters for processed, failed, and active items
-- Panic recovery inside stage workers
+- WithName option sets stage name used in StageError messages
+- WithItemTimeout option sets per-item processing deadline
+- WithRateLimit option caps throughput across all workers
+- WithMetrics option exposes live counters
+- Builder and Pipe for chaining more than two stages
+- Panic recovery in process converts panics to errors
 
 **`batch/`**
-- `Batcher` flushes on size limit or timeout
-- `RealtimeBatcher` flushes on size limit or sliding window silence
+- Flush method triggers immediate flush without waiting for size or timeout
 
 **`stream/`**
-- `Map` concurrent unordered transformation
-- `OrderedMap` concurrent transformation preserving input order
-- `FlatMap` expands one item into many
-- `BackpressureMap` caps in-flight items with a semaphore
+- FanOut distributes one stream across N output channels
+- FanIn merges N input channels into one output channel
+- Split divides a stream into two channels by predicate
+- Merge combines multiple streams into one
+- WithMetrics option on Map for live counters
 
 **`retry/`**
-- `Fixed` backoff strategy
-- `Exponential` backoff strategy with configurable cap
-- `ExponentialJitter` backoff with jitter to prevent thundering herd
-- `Do` retries a single operation
-- `DoWithResult` retries an operation that returns a value
-- `Stream` adds retry behaviour to any pipeline stage
+- ShouldRetryFunc predicate stops retrying on permanent errors
+- AlwaysRetry and NeverRetry built-in predicates
+- StreamWithDLQ routes permanently failed items to a dead letter queue
+- FailedItem carries the original item and last error
 
-**`termination/`**
-- `Terminator` coordinates graceful shutdown
-- `Track` / `Done` register and complete in-flight work
-- `Stop` signals no new work accepted
-- `Wait` blocks until all in-flight work drains
+**`internal/xatomic/`**
+- Shared atomic wrapper types used by pool, pipeline, and stream metrics
+- Eliminates duplicated atomic code across packages
 
-**`iter/`**
-- `Seq[T]` and `SeqErr[T]` push iterator types
-- `FromChan` converts a channel to an iterator
-- `FromResults` converts a Result channel to a SeqErr iterator
-- `ToChan` converts an iterator back to a channel
-- `Map` transforms iterator items
-- `Filter` keeps items matching a predicate
-- `Collect` drains an iterator into a slice
+### Changed
+- errors/ package renamed to result/ to avoid shadowing Go standard library
+- pool.NewWorkPool no longer accepts a task slice - use Submit instead
+- pool.WorkPool.Run removed - replaced by Start/Submit/Drain/Stop
