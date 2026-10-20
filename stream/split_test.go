@@ -3,7 +3,6 @@ package stream
 import (
 	"context"
 	"testing"
-	"sync"
 )
 
 func TestSplit_DividesByPredicate(t *testing.T) {
@@ -13,21 +12,19 @@ func TestSplit_DividesByPredicate(t *testing.T) {
 		return n%2 == 0
 	})
 
-	var evenCount, oddCount int
-	var wg sync.Mutex
-
+	evenCountC := make(chan int, 1)
 	go func() {
+		evenCount := 0
 		for range evens {
-			wg.Lock()
 			evenCount++
-			wg.Unlock()
 		}
+		evenCountC <- evenCount
 	}()
+	oddCount := 0
 	for range odds {
-		wg.Lock()
 		oddCount++
-		wg.Unlock()
 	}
+	evenCount := <-evenCountC
 
 	if evenCount != 3 {
 		t.Errorf("expected 3 evens, got %d", evenCount)
