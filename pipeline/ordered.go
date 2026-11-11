@@ -7,9 +7,9 @@ import (
 	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
-//Same as a stage but guarantees output order matches input order. 
+//Same as a stage but guarantees output order matches input order.
 // Without this, concurrent workers finish in unpredictable order.
-// This file tags each item with a sequence number before processing, 
+// This file tags each item with a sequence number before processing,
 // then holds results in a buffer and only releases them in the correct sequence.
 
 // indexed wraps a value with its sequence number.

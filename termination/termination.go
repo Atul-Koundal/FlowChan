@@ -19,11 +19,11 @@ import (
 
 // Terminator coordinates graceful shutdown.
 type Terminator struct {
-	mu       sync.Mutex
-	stopped  bool
-	wg       sync.WaitGroup
-	stopCh   chan struct{}
-	drainCh  chan struct{}
+	mu      sync.Mutex
+	stopped bool
+	wg      sync.WaitGroup
+	stopCh  chan struct{}
+	drainCh chan struct{}
 }
 
 // New creates a ready to use Terminator.

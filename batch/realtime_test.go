@@ -4,9 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
-
 )
-
 
 func TestRealtime_FlushesOnSilence(t *testing.T) {
 	b := NewRealtime[int](100, 100*time.Millisecond)

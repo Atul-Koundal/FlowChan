@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
-	"sync/atomic"
 
 	"go.uber.org/goleak"
 )

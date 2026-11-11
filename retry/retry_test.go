@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 
 	"go.uber.org/goleak"
 )
