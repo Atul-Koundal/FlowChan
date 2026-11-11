@@ -1,9 +1,11 @@
 // Package retry provides backoff strategies and retry helpers.
-// Use Do for single operations, Stream to add retry to a pipeline stage.
+// Use Do for single operations, Wrap to make any stage function retry,
+// and Stream for a simple serial retrying stage.
 package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -11,10 +13,6 @@ import (
 
 	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
-//Backoff strategy is used when the probe fails to establish a connection or loses an existing connection
-//The probe tries to reestablish a connection after one second, two seconds, then four seconds, and so on
-//The backoff strategy remains in place until a successful login occurs.
-
 
 // BackoffStrategy takes the attempt number (starting at 0)
 // and returns how long to wait before the next attempt.
@@ -37,43 +35,62 @@ func AlwaysRetry(_ error) bool { return true }
 // NeverRetry never retries. Fails immediately on the first error.
 func NeverRetry(_ error) bool { return false }
 
+// expBackoff returns base * 2^attempt capped at max (max <= 0 means no
+// cap). It never overflows: once the doubling would exceed the cap or
+// the int64 range it returns the cap.
+func expBackoff(base, max time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	limit := max
+	if limit <= 0 {
+		limit = time.Duration(math.MaxInt64)
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	d := base
+	for i := 0; i < attempt; i++ {
+		if d >= limit || d > limit/2 {
+			return limit
+		}
+		d *= 2
+	}
+	if d > limit {
+		return limit
+	}
+	return d
+}
+
 // Exponential returns a strategy that doubles the wait on each attempt,
 // capped at max.
 func Exponential(base, max time.Duration) BackoffStrategy {
 	return func(attempt int) time.Duration {
-		wait := base * time.Duration(math.Pow(2, float64(attempt)))
-		if wait > max {
-			return max
-		}
-		return wait
+		return expBackoff(base, max, attempt)
 	}
 }
 
-// ExponentialJitter doubles the wait time on every attempt
-// and adds random jitter to prevent thundering herd.
-// All workers retrying at the same instant hammers a
-// recovering system - jitter spreads them out.
-
-// ExponentialJitter returns an exponential strategy with random jitter.
-// Recommended for production - prevents thundering herd.
+// ExponentialJitter is Exponential with random jitter so that many
+// workers retrying at once do not hammer a recovering system in
+// lockstep. The wait is the exponential value reduced by a random
+// amount of up to 20%, so it never exceeds max and, unlike additive
+// jitter, still varies once the cap has been reached. Recommended for
+// production.
 func ExponentialJitter(base, max time.Duration) BackoffStrategy {
 	return func(attempt int) time.Duration {
-		exp := base * time.Duration(math.Pow(2, float64(attempt)))
-		if exp > max {
-			exp = max
+		exp := expBackoff(base, max, attempt)
+		spread := int64(exp / 5)
+		if spread <= 0 {
+			return exp
 		}
-		// jitter is up to 20% of exp, but final value must not exceed max
-		jitter := time.Duration(rand.Int63n(int64(exp / 5)))
-		wait := exp + jitter
-		if wait > max {
-			return max
-		}
-		return wait
+		return exp - time.Duration(rand.Int63n(spread+1))
 	}
 }
 
 // RetryError is returned when all attempts are exhausted. It wraps
 // the last error and records how many attempts were made.
+//
+//nolint:revive // exported since v0.2.0; renaming would break callers
 type RetryError struct {
 	Attempts int
 	Last     error
@@ -87,10 +104,12 @@ func (e *RetryError) Unwrap() error {
 	return e.Last
 }
 
-// Do calls fn up to maxAttempts times, waiting between attempts using
-// strategy. Returns nil on first success. If shouldRetry is provided,
-// a non-retryable error stops immediately without further attempts.
-// Respects context cancellation during wait periods.
+// Do calls fn up to maxAttempts times (at least once), waiting between
+// attempts using strategy. Returns nil on first success. If shouldRetry
+// is provided, a non-retryable error stops immediately. A panic in fn is
+// returned as a *result.PanicError and is never retried. If ctx is
+// cancelled the returned error wraps both ctx.Err() and the last
+// failure, so callers can see why it was retrying.
 func Do(
 	ctx context.Context,
 	maxAttempts int,
@@ -98,32 +117,10 @@ func Do(
 	fn func() error,
 	shouldRetry ...ShouldRetryFunc,
 ) error {
-	retryable := AlwaysRetry
-	if len(shouldRetry) > 0 && shouldRetry[0] != nil {
-		retryable = shouldRetry[0]
-	}
-
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-		// stop immediately if error is not retryable
-		if !retryable(lastErr) {
-			return lastErr
-		}
-		if attempt == maxAttempts-1 {
-			break
-		}
-		wait := strategy(attempt)
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return &RetryError{Attempts: maxAttempts, Last: lastErr}
+	_, err := DoWithResult(ctx, maxAttempts, strategy, func() (struct{}, error) {
+		return struct{}{}, fn()
+	}, shouldRetry...)
+	return err
 }
 
 // DoWithResult is like Do but fn returns a value alongside the error.
@@ -138,35 +135,68 @@ func DoWithResult[T any](
 	if len(shouldRetry) > 0 && shouldRetry[0] != nil {
 		retryable = shouldRetry[0]
 	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	if strategy == nil {
+		strategy = Fixed(0)
+	}
 
-	var lastErr error
 	var zero T
-
+	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		val, err := fn()
+		if err := ctx.Err(); err != nil {
+			return zero, errors.Join(err, lastErr)
+		}
+		val, err := fresult.Catch(fn)
 		if err == nil {
 			return val, nil
 		}
 		lastErr = err
-		if !retryable(lastErr) {
-			return zero, lastErr
+
+		var pe *fresult.PanicError
+		if errors.As(err, &pe) || !retryable(err) {
+			return zero, err
 		}
 		if attempt == maxAttempts-1 {
 			break
 		}
-		wait := strategy(attempt)
+
+		timer := time.NewTimer(strategy(attempt))
 		select {
-		case <-time.After(wait):
+		case <-timer.C:
 		case <-ctx.Done():
-			return zero, ctx.Err()
+			timer.Stop()
+			return zero, errors.Join(ctx.Err(), lastErr)
 		}
 	}
 	return zero, &RetryError{Attempts: maxAttempts, Last: lastErr}
 }
 
+// Wrap returns a function that retries fn with backoff. Use it to give
+// retry behaviour to any concurrent stage, e.g.
+//
+//	pipeline.NewStage(8, retry.Wrap(3, retry.ExponentialJitter(time.Second, 30*time.Second), callAPI))
+//
+// so retries run on the stage's own workers instead of a single goroutine.
+func Wrap[In, Out any](
+	maxAttempts int,
+	strategy BackoffStrategy,
+	fn func(context.Context, In) (Out, error),
+	shouldRetry ...ShouldRetryFunc,
+) func(context.Context, In) (Out, error) {
+	return func(ctx context.Context, item In) (Out, error) {
+		return DoWithResult(ctx, maxAttempts, strategy, func() (Out, error) {
+			return fn(ctx, item)
+		}, shouldRetry...)
+	}
+}
+
 // Stream applies fn to each item from in, retrying failed items with
-// backoff. Pass an optional ShouldRetryFunc to stop retrying on
-// permanent errors immediately without exhausting all attempts.
+// backoff. Items are processed one at a time, so a slow retry delays
+// everything behind it; for parallel retries use Wrap with a Stage or
+// stream.Map. Pass an optional ShouldRetryFunc to stop retrying on
+// permanent errors immediately.
 func Stream[In, Out any](
 	ctx context.Context,
 	in <-chan In,
@@ -176,6 +206,7 @@ func Stream[In, Out any](
 	shouldRetry ...ShouldRetryFunc,
 ) <-chan fresult.Result[Out] {
 	out := make(chan fresult.Result[Out], 1)
+	wrapped := Wrap(maxAttempts, strategy, fn, shouldRetry...)
 
 	go func() {
 		defer close(out)
@@ -185,10 +216,7 @@ func Stream[In, Out any](
 				if !ok {
 					return
 				}
-				val, err := DoWithResult(ctx, maxAttempts, strategy, func() (Out, error) {
-					return fn(ctx, item)
-				}, shouldRetry...)
-
+				val, err := wrapped(ctx, item)
 				select {
 				case out <- fresult.Result[Out]{Value: val, Err: err}:
 				case <-ctx.Done():

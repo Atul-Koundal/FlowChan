@@ -1,9 +1,9 @@
 package result
 
-import(
-	"fmt"
+import (
 	"errors"
-) 
+	"fmt"
+)
 
 // As is errors.As for convenience - finds the first error in err's
 // chain that matches target.

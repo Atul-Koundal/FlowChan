@@ -24,6 +24,7 @@ func StreamWithDLQ[In, Out any](
 	maxAttempts int,
 	strategy BackoffStrategy,
 	fn func(context.Context, In) (Out, error),
+	shouldRetry ...ShouldRetryFunc,
 ) (<-chan fresult.Result[Out], <-chan FailedItem[In]) {
 	out := make(chan fresult.Result[Out], 1)
 	dlq := make(chan FailedItem[In], 1)
@@ -41,7 +42,7 @@ func StreamWithDLQ[In, Out any](
 
 				val, err := DoWithResult(ctx, maxAttempts, strategy, func() (Out, error) {
 					return fn(ctx, item)
-				})
+				}, shouldRetry...)
 
 				if err != nil {
 					// all retries exhausted - route to dead letter queue

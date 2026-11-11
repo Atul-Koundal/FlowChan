@@ -9,9 +9,9 @@ import (
 	"github.com/Atul-Koundal/FlowChan/iter"
 	"github.com/Atul-Koundal/FlowChan/pipeline"
 	"github.com/Atul-Koundal/FlowChan/pool"
+	"github.com/Atul-Koundal/FlowChan/retry"
 	"github.com/Atul-Koundal/FlowChan/stream"
 	"github.com/Atul-Koundal/FlowChan/termination"
-	"github.com/Atul-Koundal/FlowChan/retry"
 )
 
 // --- pool tasks ---
@@ -263,8 +263,6 @@ func runTermination() {
 			fmt.Printf("  worker %d finished\n", workerID)
 		}()
 	}
-
-	
 
 	// signal stop after 50ms - workers are still running
 	go func() {

@@ -24,7 +24,6 @@ func WithMetrics(m *Metrics) MapOption {
 	}
 }
 
-
 // Map applies fn to each item concurrently. Results may arrive in
 // any order. Use OrderedMap when output order must match input order.
 func Map[In, Out any](
@@ -78,6 +77,7 @@ func Map[In, Out any](
 
 	return out
 }
+
 // OrderedMap applies fn concurrently but guarantees output order
 // matches input order. Slower than Map due to the reordering buffer.
 func OrderedMap[In, Out any](

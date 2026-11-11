@@ -2,9 +2,9 @@ package batch
 
 import (
 	"context"
+	"go.uber.org/goleak"
 	"testing"
 	"time"
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
