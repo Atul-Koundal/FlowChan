@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  default: standard        # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - misspell
+    - unconvert
+    - nolintlint
+    - revive
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: error-naming
+        - name: error-strings
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: errorf
+        - name: unreachable-code
+        - name: unused-parameter
+          disabled: true
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters: [revive, errcheck]
+      - path: ^(example|benchmarks)/
+        linters: [revive, errcheck]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
