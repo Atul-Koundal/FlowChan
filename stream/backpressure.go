@@ -7,21 +7,21 @@ import (
 	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
-//Parallel map with a safety valve.
-//  Without backpressure, a fast producer feeding slow workers fills memory with unbounded in-flight items.
-//  This file uses a semaphore to cap how many items are being processed at once, when all worker
-//slots are full, reading from the input channel blocks naturally, slowing the producer down.
-
 // BackpressureMap processes items concurrently but slows the producer
-// when workers are busy, preventing unbounded memory growth.
+// when workers are busy, preventing unbounded memory growth. At most
+// workers items are in flight; once all slots are taken, reading from
+// in blocks, which pushes back on the producer. A panic in fn becomes a
+// *result.PanicError.
 func BackpressureMap[In, Out any](
 	ctx context.Context,
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) (Out, error),
 ) <-chan fresult.Result[Out] {
+	if workers < 1 {
+		workers = 1
+	}
 	// semaphore limits how many items are in-flight at once
-	// when all slots are taken, reading from `in` blocks naturally
 	sem := make(chan struct{}, workers)
 	out := make(chan fresult.Result[Out], workers)
 
@@ -40,8 +40,7 @@ func BackpressureMap[In, Out any](
 					return
 				}
 
-				// acquire semaphore slot , blocks if workers are full
-				// this IS the backpressure , producer slows down here
+				// acquire a slot; this IS the backpressure
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -53,7 +52,7 @@ func BackpressureMap[In, Out any](
 					defer wg.Done()
 					defer func() { <-sem }() // release slot when done
 
-					val, err := fn(ctx, it)
+					val, err := fresult.Catch(func() (Out, error) { return fn(ctx, it) })
 					select {
 					case out <- fresult.Result[Out]{Value: val, Err: err}:
 					case <-ctx.Done():

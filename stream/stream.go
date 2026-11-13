@@ -1,31 +1,35 @@
 // Package stream provides concurrent stream transformation functions.
 // All functions return a channel that closes when input is exhausted
-// or the context is cancelled.
+// or the context is cancelled. A panic in a user callback is recovered
+// and delivered as a *result.PanicError, and every goroutine exits when
+// the context is cancelled even if the consumer stops reading.
 package stream
 
 import (
 	"context"
 	"sync"
 
+	"github.com/Atul-Koundal/FlowChan/internal/ordered"
 	fresult "github.com/Atul-Koundal/FlowChan/result"
 )
 
-// MapOption configures optional behaviour on Map and OrderedMap.
+// MapOption configures optional behaviour on Map.
 type MapOption func(*mapConfig)
 
 type mapConfig struct {
 	metrics *Metrics
 }
 
-// WithMetrics attaches a Metrics collector to a Map or OrderedMap call.
+// WithMetrics attaches a Metrics collector to a Map call.
 func WithMetrics(m *Metrics) MapOption {
 	return func(c *mapConfig) {
 		c.metrics = m
 	}
 }
 
-// Map applies fn to each item concurrently. Results may arrive in
-// any order. Use OrderedMap when output order must match input order.
+// Map applies fn to each item concurrently using workers goroutines
+// (values below 1 are treated as 1). Results may arrive in any order.
+// Use OrderedMap when output order must match input order.
 func Map[In, Out any](
 	ctx context.Context,
 	in <-chan In,
@@ -36,6 +40,9 @@ func Map[In, Out any](
 	cfg := &mapConfig{}
 	for _, o := range opts {
 		o(cfg)
+	}
+	if workers < 1 {
+		workers = 1
 	}
 
 	out := make(chan fresult.Result[Out], workers)
@@ -54,7 +61,7 @@ func Map[In, Out any](
 					if cfg.metrics != nil {
 						cfg.metrics.active.Add(1)
 					}
-					val, err := fn(ctx, item)
+					val, err := fresult.Catch(func() (Out, error) { return fn(ctx, item) })
 					if cfg.metrics != nil {
 						cfg.metrics.active.Add(-1)
 						cfg.metrics.processed.Add(1)
@@ -62,7 +69,11 @@ func Map[In, Out any](
 							cfg.metrics.failed.Add(1)
 						}
 					}
-					out <- fresult.Result[Out]{Value: val, Err: err}
+					select {
+					case out <- fresult.Result[Out]{Value: val, Err: err}:
+					case <-ctx.Done():
+						return
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -79,98 +90,16 @@ func Map[In, Out any](
 }
 
 // OrderedMap applies fn concurrently but guarantees output order
-// matches input order. Slower than Map due to the reordering buffer.
+// matches input order. Workers may run at most a few times their count
+// ahead of the oldest unfinished item, which bounds memory when one
+// item is slow.
 func OrderedMap[In, Out any](
 	ctx context.Context,
 	in <-chan In,
 	workers int,
 	fn func(context.Context, In) (Out, error),
 ) <-chan fresult.Result[Out] {
-	// wrap each item with its sequence number
-	type indexed struct {
-		idx  int
-		item In
-	}
-
-	type indexedResult struct {
-		idx int
-		res fresult.Result[Out]
-	}
-
-	// index the input
-	indexed_in := make(chan indexed, workers)
-	go func() {
-		defer close(indexed_in)
-		i := 0
-		for {
-			select {
-			case item, ok := <-in:
-				if !ok {
-					return
-				}
-				indexed_in <- indexed{idx: i, item: item}
-				i++
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// process concurrently, emit indexed results
-	rawOut := make(chan indexedResult, workers)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case idxItem, ok := <-indexed_in:
-					if !ok {
-						return
-					}
-					val, err := fn(ctx, idxItem.item)
-					rawOut <- indexedResult{
-						idx: idxItem.idx,
-						res: fresult.Result[Out]{Value: val, Err: err},
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-	go func() {
-		wg.Wait()
-		close(rawOut)
-	}()
-
-	// reorder results by sequence number
-	out := make(chan fresult.Result[Out], workers)
-	go func() {
-		defer close(out)
-
-		// buffer holds results that arrived early
-		buffer := make(map[int]fresult.Result[Out])
-		next := 0
-
-		for r := range rawOut {
-			buffer[r.idx] = r.res
-			// flush all consecutive results we have
-			for {
-				res, ok := buffer[next]
-				if !ok {
-					break
-				}
-				out <- res
-				delete(buffer, next)
-				next++
-			}
-		}
-	}()
-
-	return out
+	return ordered.Run(ctx, in, workers, fn)
 }
 
 // FlatMap applies fn to each item where fn returns a slice. All items
@@ -181,7 +110,19 @@ func FlatMap[In, Out any](
 	workers int,
 	fn func(context.Context, In) ([]Out, error),
 ) <-chan fresult.Result[Out] {
+	if workers < 1 {
+		workers = 1
+	}
 	out := make(chan fresult.Result[Out], workers)
+
+	send := func(r fresult.Result[Out]) bool {
+		select {
+		case out <- r:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -194,14 +135,17 @@ func FlatMap[In, Out any](
 					if !ok {
 						return
 					}
-					vals, err := fn(ctx, item)
+					vals, err := fresult.Catch(func() ([]Out, error) { return fn(ctx, item) })
 					if err != nil {
-						out <- fresult.Result[Out]{Err: err}
+						if !send(fresult.Result[Out]{Err: err}) {
+							return
+						}
 						continue
 					}
-					// emit each expanded item individually
 					for _, v := range vals {
-						out <- fresult.Result[Out]{Value: v}
+						if !send(fresult.Result[Out]{Value: v}) {
+							return
+						}
 					}
 				case <-ctx.Done():
 					return

@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -63,6 +62,9 @@ func WithItemTimeout[In, Out any](d time.Duration) StageOption[In, Out] {
 // NewStage creates a stage that runs fn across the given number of
 // concurrent workers.
 func NewStage[In, Out any](workers int, fn func(context.Context, In) (Out, error), opts ...StageOption[In, Out]) *Stage[In, Out] {
+	if workers < 1 {
+		workers = 1
+	}
 	s := &Stage[In, Out]{workers: workers, fn: fn}
 	for _, o := range opts {
 		o(s)
@@ -149,28 +151,20 @@ func (s *Stage[In, Out]) runWorker(ctx context.Context, in <-chan In, out chan<-
 }
 
 // process calls fn with an optional per-item timeout and recovers
-// any panic, converting it into an error so a single bad item
-// cannot crash the whole stage.
-func (s *Stage[In, Out]) process(ctx context.Context, val In) (out Out, err error) {
+// any panic, converting it into a *result.PanicError so a single bad
+// item cannot crash the whole stage. The item timeout only takes effect
+// if fn honours its context. Errors, including recovered panics, are
+// wrapped in a StageError when the stage has a name.
+func (s *Stage[In, Out]) process(ctx context.Context, val In) (Out, error) {
 	if s.itemTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.itemTimeout)
 		defer cancel()
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("panic in stage: %v", r)
-		}
-	}()
-
-	out, err = s.fn(ctx, val)
+	out, err := fresult.Catch(func() (Out, error) { return s.fn(ctx, val) })
 	if err != nil && s.name != "" {
-		err = &fresult.StageError{
-			Stage:   s.name,
-			Attempt: 1,
-			Err:     err,
-		}
+		err = &fresult.StageError{Stage: s.name, Attempt: 1, Err: err}
 	}
 	return out, err
 }
